@@ -3,7 +3,12 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
-import { getGitHistory, rewriteGitHistory } from '@/api/gitHistoryApi'
+import {
+  forcePushOrigin,
+  getGitHistory,
+  rewriteGitHistory,
+  setGitOrigin,
+} from '@/api/gitHistoryApi'
 import { buildTimelineBatchEdits } from '@/utils/timelineScheduler'
 import type { CommitEdit, GitCommit } from '@/types/gitHistory'
 import BusyModal from '@/components/common/BusyModal.vue'
@@ -67,9 +72,13 @@ let resizeStartWidth = 0
 let isResizingColumns = false
 
 const hasHistory = computed(() => commits.value.length > 0)
-const manualEditCount = computed(() => Object.values(editMap).filter((edit) => hasPendingChanges(edit)).length)
+const manualEditCount = computed(
+  () => Object.values(editMap).filter((edit) => hasPendingChanges(edit)).length,
+)
 
-const currentCommit = computed(() => commits.value.find((item) => item.id === selectedCommitId.value))
+const currentCommit = computed(() =>
+  commits.value.find((item) => item.id === selectedCommitId.value),
+)
 
 const timelineRows = computed<TimelineRow[]>(() => {
   const latestFirst = [...commits.value].reverse()
@@ -108,7 +117,16 @@ const timelineRows = computed<TimelineRow[]>(() => {
 })
 
 function laneColor(index: number): string {
-  const colors = ['#2f80ed', '#27ae60', '#f2994a', '#eb5757', '#9b51e0', '#56ccf2', '#219653', '#f2c94c']
+  const colors = [
+    '#2f80ed',
+    '#27ae60',
+    '#f2994a',
+    '#eb5757',
+    '#9b51e0',
+    '#56ccf2',
+    '#219653',
+    '#f2c94c',
+  ]
   return colors[index % colors.length] ?? '#2f80ed'
 }
 
@@ -300,6 +318,58 @@ async function executeRewrite(edits: CommitEdit[]) {
   }
 }
 
+async function setupOrigin() {
+  if (!repoPath.value) {
+    errorText.value = '请先选择项目目录'
+    return
+  }
+
+  const input = window.prompt('请输入 origin 地址，例如：https://github.com/user/repo.git')
+  if (!input) {
+    return
+  }
+
+  try {
+    isLoading.value = true
+    showBusyModal('正在设置 Origin', '正在写入远程仓库地址，请稍候...')
+    const result = await setGitOrigin(repoPath.value, input)
+    statusText.value = `Origin 已设置: ${result}`
+    addLog(`Origin 设置完成: ${result}`)
+  } catch (error) {
+    errorText.value = String(error)
+    addLog(`Origin 设置失败: ${String(error)}`)
+  } finally {
+    isLoading.value = false
+    hideBusyModal()
+  }
+}
+
+async function runForcePush() {
+  if (!repoPath.value) {
+    errorText.value = '请先选择项目目录'
+    return
+  }
+
+  const confirmed = window.confirm('即将执行 force push 到 origin，是否继续？')
+  if (!confirmed) {
+    return
+  }
+
+  try {
+    isRewriting.value = true
+    showBusyModal('正在执行 Force Push', '正在推送到 origin，请不要关闭应用...')
+    const output = await forcePushOrigin(repoPath.value)
+    statusText.value = 'Force push 完成'
+    addLog(`Force push 完成: ${output}`)
+  } catch (error) {
+    errorText.value = String(error)
+    addLog(`Force push 失败: ${String(error)}`)
+  } finally {
+    isRewriting.value = false
+    hideBusyModal()
+  }
+}
+
 function clearLogs() {
   logs.value = []
 }
@@ -372,11 +442,17 @@ onUnmounted(() => {
         :is-loading="isLoading"
         :is-rewriting="isRewriting"
         @pick-repo="pickRepoFolder"
+        @set-origin="setupOrigin"
+        @force-push="runForcePush"
       />
 
       <p v-if="errorText" class="error-banner">{{ errorText }}</p>
 
-      <div ref="workspaceRef" class="workspace-grid" :style="{ '--left-pane-width': `${leftPaneWidth}px` }">
+      <div
+        ref="workspaceRef"
+        class="workspace-grid"
+        :style="{ '--left-pane-width': `${leftPaneWidth}px` }"
+      >
         <GitTimelinePanel
           :is-loading="isLoading"
           :has-history="hasHistory"

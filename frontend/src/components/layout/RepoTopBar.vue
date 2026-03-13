@@ -8,34 +8,36 @@ defineProps<{
 
 const emit = defineEmits<{
   (event: 'pick-repo'): void
+  (event: 'set-origin'): void
+  (event: 'force-push'): void
 }>()
 </script>
 
 <template>
   <div class="top-bar">
-    <button
-      class="btn btn-primary btn-large shadow-brand"
-      :disabled="isLoading || isRewriting"
-      @click="emit('pick-repo')"
-    >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="20"
-        height="20"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-        stroke-width="2"
-        style="margin-right: 8px"
+    <div class="action-group">
+      <button
+        class="btn btn-primary btn-compact shadow-brand"
+        :disabled="isLoading || isRewriting"
+        @click="emit('pick-repo')"
       >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-        />
-      </svg>
-      选择项目文件夹
-    </button>
+        选择文件夹
+      </button>
+      <button
+        class="btn btn-outline"
+        :disabled="isLoading || isRewriting || !repoPath"
+        @click="emit('set-origin')"
+      >
+        设置Origin
+      </button>
+      <button
+        class="btn btn-danger"
+        :disabled="isLoading || isRewriting || !repoPath"
+        @click="emit('force-push')"
+      >
+        ForcePush
+      </button>
+    </div>
     <div class="repo-status">
       <div class="status-indicator" :class="{ active: repoPath }"></div>
       <div class="status-texts">
@@ -51,8 +53,14 @@ const emit = defineEmits<{
   padding: 24px 32px;
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 16px;
   flex-shrink: 0;
+}
+
+.action-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .repo-status {
@@ -120,10 +128,10 @@ const emit = defineEmits<{
   cursor: not-allowed;
 }
 
-.btn-large {
-  padding: 12px 24px;
-  font-size: 14px;
-  border-radius: 12px;
+.btn-compact {
+  width: 132px;
+  padding: 10px 12px;
+  font-size: 13px;
 }
 
 .btn-primary {
@@ -138,5 +146,24 @@ const emit = defineEmits<{
 
 .shadow-brand {
   box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+}
+
+.btn-outline {
+  background: #ffffff;
+  color: #2563eb;
+  border: 1px solid #93c5fd;
+}
+
+.btn-outline:not(:disabled):hover {
+  background: #eff6ff;
+}
+
+.btn-danger {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.btn-danger:not(:disabled):hover {
+  background: #dc2626;
 }
 </style>

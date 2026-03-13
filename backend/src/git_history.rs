@@ -96,6 +96,38 @@ pub fn rewrite_git_history_impl(app: &AppHandle, request: RewriteRequest) -> Res
     })
 }
 
+pub fn set_git_origin_impl(app: &AppHandle, repo_path: &str, origin_url: &str) -> Result<String, String> {
+    emit_log(app, &format!("正在验证 Git 仓库: {repo_path}"));
+    ensure_git_repo(repo_path)?;
+
+    let trimmed_url = origin_url.trim();
+    if trimmed_url.is_empty() {
+        return Err("origin 地址不能为空".to_string());
+    }
+
+    let has_origin = run_git_command(repo_path, &["remote", "get-url", "origin"]).is_ok();
+    if has_origin {
+        emit_log(app, "检测到已存在 origin，正在更新地址...");
+        run_git_command(repo_path, &["remote", "set-url", "origin", trimmed_url])?;
+    } else {
+        emit_log(app, "未检测到 origin，正在新增远程仓库...");
+        run_git_command(repo_path, &["remote", "add", "origin", trimmed_url])?;
+    }
+
+    emit_log(app, "origin 设置完成");
+    Ok(trimmed_url.to_string())
+}
+
+pub fn force_push_origin_impl(app: &AppHandle, repo_path: &str) -> Result<String, String> {
+    emit_log(app, &format!("正在验证 Git 仓库: {repo_path}"));
+    ensure_git_repo(repo_path)?;
+
+    emit_log(app, "正在执行 git push --force origin HEAD...");
+    let output = run_git_command(repo_path, &["push", "--force", "origin", "HEAD"])?;
+    emit_log(app, "force push 已完成");
+    Ok(output)
+}
+
 fn emit_log(app: &AppHandle, message: &str) {
     app.emit("log", message).ok();
 }

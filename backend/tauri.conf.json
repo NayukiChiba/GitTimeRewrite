@@ -1,5 +1,5 @@
 {
-  "productName": "Git Time Rewrite",
+  "productName": "GitTimeRewrite",
   "version": "0.1.0",
   "identifier": "com.nayukichiba.gittimerewrite",
   "build": {
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Git Time Rewrite",
+        "title": "GitTimeRewrite",
         "width": 1000,
         "height": 680,
         "resizable": true,

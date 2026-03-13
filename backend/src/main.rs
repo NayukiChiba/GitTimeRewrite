@@ -3,7 +3,10 @@
 
 mod git_history;
 
-use git_history::{get_git_history_impl, rewrite_git_history_impl, RewriteRequest};
+use git_history::{
+    force_push_origin_impl, get_git_history_impl, rewrite_git_history_impl, set_git_origin_impl,
+    RewriteRequest,
+};
 
 #[tauri::command]
 fn get_git_history(app: tauri::AppHandle, repo_path: String) -> Result<Vec<git_history::GitCommit>, String> {
@@ -15,11 +18,26 @@ fn rewrite_git_history(app: tauri::AppHandle, request: RewriteRequest) -> Result
     rewrite_git_history_impl(&app, request)
 }
 
+#[tauri::command]
+fn set_git_origin(app: tauri::AppHandle, repo_path: String, origin_url: String) -> Result<String, String> {
+    set_git_origin_impl(&app, &repo_path, &origin_url)
+}
+
+#[tauri::command]
+fn force_push_origin(app: tauri::AppHandle, repo_path: String) -> Result<String, String> {
+    force_push_origin_impl(&app, &repo_path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![get_git_history, rewrite_git_history])
+        .invoke_handler(tauri::generate_handler![
+            get_git_history,
+            rewrite_git_history,
+            set_git_origin,
+            force_push_origin
+        ])
         .run(tauri::generate_context!())
         .expect("tauri app 运行失败");
 }
