@@ -1,5 +1,4 @@
 {
-  "$schema": "https://schema.tauri.app/capability/2",
   "identifier": "default",
   "description": "默认桌面权限",
   "windows": ["main"],

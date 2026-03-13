@@ -1,16 +1,25 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import { getGitHistory, rewriteGitHistory } from '@/api/gitHistoryApi'
 import { buildTimelineBatchEdits } from '@/utils/timelineScheduler'
 import type { CommitEdit, GitCommit } from '@/types/gitHistory'
 
+type TimelineRow = {
+  commit: GitCommit
+  lane: number
+  laneCount: number
+  isMerge: boolean
+}
+
 const repoPath = ref('')
 const commits = ref<GitCommit[]>([])
+const selectedCommitId = ref('')
 const isLoading = ref(false)
 const isRewriting = ref(false)
-const statusText = ref('等待选择仓库')
+const statusText = ref('请选择一个 Git 仓库')
 const errorText = ref('')
 
 const batchForm = reactive({
@@ -23,42 +32,9 @@ const batchForm = reactive({
 })
 
 const editMap = reactive<Record<string, CommitEdit>>({})
-
-// 日志相关状态
 const logs = ref<string[]>([])
 const logContentRef = ref<HTMLElement | null>(null)
 let unlistenLog: (() => void) | null = null
-
-function addLog(message: string) {
-  const now = new Date().toLocaleTimeString('zh-CN', { hour12: false })
-  logs.value.push(`[${now}] ${message}`)
-}
-
-function clearLogs() {
-  logs.value = []
-}
-
-// 日志内容变化时自动滚动到底部
-watch(
-  () => logs.value.length,
-  async () => {
-    await nextTick()
-    if (logContentRef.value) {
-      logContentRef.value.scrollTop = logContentRef.value.scrollHeight
-    }
-  },
-)
-
-// 监听后端发送的日志事件
-onMounted(async () => {
-  unlistenLog = await listen<string>('log', (event) => {
-    addLog(event.payload)
-  })
-})
-
-onUnmounted(() => {
-  unlistenLog?.()
-})
 
 const hasHistory = computed(() => commits.value.length > 0)
 const manualEditCount = computed(
@@ -75,13 +51,63 @@ const manualEditCount = computed(
     ).length,
 )
 
-const timeRangeText = computed(() => `${batchForm.startTime} -> ${batchForm.endTime}`)
+const currentCommit = computed(() =>
+  commits.value.find((item) => item.id === selectedCommitId.value),
+)
 
-function getOrCreateEdit(commitId: string): CommitEdit {
-  if (!editMap[commitId]) {
-    editMap[commitId] = { id: commitId }
+const timelineRows = computed<TimelineRow[]>(() => {
+  const latestFirst = [...commits.value].reverse()
+  const lanes: string[] = []
+  const rows: TimelineRow[] = []
+
+  for (const commit of latestFirst) {
+    let lane = lanes.indexOf(commit.id)
+    if (lane < 0) {
+      lane = lanes.length
+      lanes.push(commit.id)
+    }
+
+    rows.push({
+      commit,
+      lane,
+      laneCount: Math.min(Math.max(lanes.length, lane + 1), 8),
+      isMerge: commit.parentIds.length > 1,
+    })
+
+    const firstParent = commit.parentIds[0]
+    if (firstParent) {
+      lanes[lane] = firstParent
+    } else {
+      lanes.splice(lane, 1)
+    }
+
+    for (const parent of commit.parentIds.slice(1)) {
+      if (!lanes.includes(parent)) {
+        lanes.push(parent)
+      }
+    }
   }
-  return editMap[commitId]
+
+  return rows
+})
+
+function laneColor(index: number): string {
+  const colors = [
+    '#2f80ed',
+    '#27ae60',
+    '#f2994a',
+    '#eb5757',
+    '#9b51e0',
+    '#56ccf2',
+    '#219653',
+    '#f2c94c',
+  ]
+  return colors[index % colors.length] ?? '#2f80ed'
+}
+
+function addLog(message: string) {
+  const now = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+  logs.value.push(`[${now}] ${message}`)
 }
 
 function resetFeedback() {
@@ -90,6 +116,18 @@ function resetFeedback() {
 
 function normalizeRepoPath(selectedPath: string) {
   repoPath.value = selectedPath.replace(/\\/g, '/')
+}
+
+function getOrCreateEdit(commitId: string): CommitEdit {
+  if (!editMap[commitId]) {
+    editMap[commitId] = { id: commitId }
+  }
+  return editMap[commitId]
+}
+
+function selectCommit(commitId: string) {
+  selectedCommitId.value = commitId
+  getOrCreateEdit(commitId)
 }
 
 function formatDate(dateText: string): string {
@@ -125,10 +163,15 @@ async function refreshHistory() {
     resetFeedback()
     addLog(`开始加载仓库历史: ${repoPath.value}`)
     commits.value = await getGitHistory(repoPath.value)
-    Object.keys(editMap).forEach((key) => {
-      delete editMap[key]
-    })
     statusText.value = `已加载 ${commits.value.length} 条提交历史`
+
+    if (commits.value.length > 0) {
+      const latestCommit = commits.value[commits.value.length - 1]
+      if (!latestCommit) {
+        return
+      }
+      selectCommit(latestCommit.id)
+    }
   } catch (error) {
     errorText.value = String(error)
     addLog(`加载失败: ${String(error)}`)
@@ -209,431 +252,796 @@ async function executeRewrite(edits: CommitEdit[]) {
     isRewriting.value = false
   }
 }
+
+async function minimizeWindow() {
+  await getCurrentWindow().minimize()
+}
+
+async function toggleMaximizeWindow() {
+  await getCurrentWindow().toggleMaximize()
+}
+
+async function closeWindow() {
+  await getCurrentWindow().close()
+}
+
+watch(
+  () => logs.value.length,
+  async () => {
+    await nextTick()
+    if (logContentRef.value) {
+      logContentRef.value.scrollTop = logContentRef.value.scrollHeight
+    }
+  },
+)
+
+onMounted(async () => {
+  unlistenLog = await listen<string>('log', (event) => {
+    addLog(event.payload)
+  })
+})
+
+onUnmounted(() => {
+  unlistenLog?.()
+})
+
+function clearLogs() {
+  logs.value = []
+}
+
+function resetEdits() {
+  for (const key in editMap) {
+    delete editMap[key]
+  }
+}
 </script>
+
+
 
 <template>
   <div class="app-shell">
-    <header class="hero">
-      <p class="tag">Git Time Rewrite</p>
-      <h1>Git 历史时间编辑工作台</h1>
-      <p class="desc">
-        选择仓库后可查看提交、逐条编辑 message/作者/时间，并按连续日期规则批量重写时间线。
-      </p>
+    <header class="window-bar" data-tauri-drag-region>
+      <div class="window-title" data-tauri-drag-region>
+        <svg class="app-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path></svg>
+        <span>Git Time Rewrite</span>
+      </div>
+      <div class="window-actions">
+        <button class="win-btn" @click="minimizeWindow">
+          <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 6h10" stroke="#64748b" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <button class="win-btn" @click="toggleMaximizeWindow">
+          <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" stroke="#64748b" stroke-width="1.5" fill="none" rx="1"/></svg>
+        </button>
+        <button class="win-btn win-close" @click="closeWindow">
+          <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 2l8 8M10 2L2 10" stroke="#64748b" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
     </header>
 
-    <section class="toolbar panel" aria-label="仓库操作区">
-      <div class="toolbar-grid">
-        <button
-          class="btn btn-primary"
-          :disabled="isLoading || isRewriting"
-          @click="pickRepoFolder"
-        >
-          选择仓库
+    <main class="main-layout">
+      <!-- Top Row: Select Folder -->
+      <div class="top-bar">
+        <button class="btn btn-primary btn-large shadow-brand" :disabled="isLoading || isRewriting" @click="pickRepoFolder">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="margin-right: 8px">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+          选择项目文件夹
         </button>
-        <label class="field">
-          <span>仓库路径</span>
-          <input v-model="repoPath" placeholder="例如 D:/work/demo" />
-        </label>
-        <button
-          class="btn btn-secondary"
-          :disabled="isLoading || isRewriting"
-          @click="refreshHistory"
-        >
-          刷新历史
-        </button>
-      </div>
-      <p class="status">{{ statusText }}</p>
-      <p v-if="errorText" class="error">{{ errorText }}</p>
-    </section>
-
-    <section class="ops-grid">
-      <article class="panel" aria-label="批量编辑区">
-        <div class="panel-head">
-          <h2>批量时间线</h2>
-          <span class="chip">窗口 {{ timeRangeText }}</span>
+        <div class="repo-status">
+          <div class="status-indicator" :class="{ active: repoPath }"></div>
+          <div class="status-texts">
+            <span class="repo-path" :title="repoPath">{{ repoPath || '未选择仓库' }}</span>
+            <span class="status-msg" v-if="statusText">{{ statusText }}</span>
+          </div>
         </div>
-        <div class="form-grid">
-          <label class="field">
-            <span>开始日期</span>
-            <input v-model="batchForm.startDate" type="date" />
-          </label>
-          <label class="field">
-            <span>结束日期</span>
-            <input v-model="batchForm.endDate" type="date" />
-          </label>
-          <label class="field">
-            <span>开始时间</span>
-            <input v-model="batchForm.startTime" type="time" />
-          </label>
-          <label class="field">
-            <span>结束时间（可跨天）</span>
-            <input v-model="batchForm.endTime" type="time" />
-          </label>
-          <label class="field">
-            <span>批量作者名（可选）</span>
-            <input v-model="batchForm.authorName" />
-          </label>
-          <label class="field">
-            <span>批量作者邮箱（可选）</span>
-            <input v-model="batchForm.authorEmail" />
-          </label>
+      </div>
+
+      <p v-if="errorText" class="error-banner">{{ errorText }}</p>
+
+      <div class="workspace-grid">
+        <!-- Left: Timeline Grid (Native-like) -->
+        <div class="card col-left">
+          <div class="card-head">
+            <h2>Git 时间线</h2>
+            <span class="chip">{{ commits.length }} 条记录</span>
+          </div>
+          <div class="card-body scroll-y">
+            <div v-if="isLoading" class="placeholder">正在读取 Git 历史...</div>
+            <div v-else-if="!hasHistory" class="placeholder">请在上方选择包含 Git 的文件夹</div>
+            <div v-else class="timeline-list">
+              <button
+                v-for="row in timelineRows"
+                :key="row.commit.id"
+                class="timeline-item"
+                :class="{ active: row.commit.id === selectedCommitId }"
+                @click="selectCommit(row.commit.id)"
+              >
+                <div class="graph" :style="{ '--lane-count': `${row.laneCount}` }">
+                  <span
+                    v-for="lane in row.laneCount"
+                    :key="`line-${row.commit.id}-${lane}`"
+                    class="graph-line"
+                    :style="{ left: `${(lane - 1) * 16 + 12}px` }"
+                  />
+                  <span
+                    class="graph-node"
+                    :style="{ left: `${row.lane * 16 + 8}px`, backgroundColor: laneColor(row.lane) }"
+                  />
+                </div>
+                <div class="timeline-content">
+                  <div class="timeline-top">
+                    <span class="message">{{ row.commit.message }}</span>
+                  </div>
+                  <div class="timeline-bottom">
+                     <span class="commit-id">{{ row.commit.id.slice(0, 8) }}</span>
+                     <span class="meta-dot">·</span>
+                     <span class="meta">{{ row.commit.authorName }}</span>
+                     <span class="meta-dot">·</span>
+                     <span class="meta date">{{ formatDate(row.commit.authorDate) }}</span>
+                     <span v-if="row.isMerge" class="badge ml-auto">Merge</span>
+                  </div>
+                </div>
+              </button>
+            </div>
+          </div>
         </div>
-        <button
-          class="btn btn-primary"
-          :disabled="isLoading || isRewriting || !hasHistory"
-          @click="applyBatchTimelineEdits"
-        >
-          批量改写时间线
-        </button>
-      </article>
 
-      <article class="panel" aria-label="手动编辑区">
-        <div class="panel-head">
-          <h2>手动提交编辑</h2>
-          <span class="chip">待提交 {{ manualEditCount }}</span>
+        <!-- Right: Action Panels -->
+        <div class="col-right scroll-y">
+          <!-- Edit Area -->
+          <div class="card auto-height">
+            <div class="card-head">
+              <h2>编辑选中提交</h2>
+              <span v-if="currentCommit" class="chip blue-chip">当前: {{ currentCommit.id.slice(0,8) }}</span>
+            </div>
+            <div v-if="!currentCommit" class="placeholder small">请在左侧时间线选择一条提交记录进行编辑</div>
+            <div v-else class="form-body">
+              <label class="field full">
+                <span>提交说明 (Message)</span>
+                <textarea
+                  v-model="getOrCreateEdit(currentCommit.id).message"
+                  :placeholder="currentCommit.message"
+                  rows="2"
+                />
+              </label>
+              <div class="form-grid">
+                <label class="field">
+                  <span>作者名称</span>
+                  <input v-model="getOrCreateEdit(currentCommit.id).authorName" :placeholder="currentCommit.authorName" />
+                </label>
+                <label class="field">
+                  <span>作者邮箱</span>
+                  <input v-model="getOrCreateEdit(currentCommit.id).authorEmail" :placeholder="currentCommit.authorEmail" />
+                </label>
+                <label class="field">
+                  <span>作者时间</span>
+                  <input v-model="getOrCreateEdit(currentCommit.id).authorDate" :placeholder="formatDate(currentCommit.authorDate)" />
+                </label>
+                <label class="field">
+                  <span>提交时间</span>
+                  <input v-model="getOrCreateEdit(currentCommit.id).committerDate" :placeholder="formatDate(currentCommit.committerDate)" />
+                </label>
+              </div>
+              <div class="actions-row mt-4">
+                <button class="btn btn-primary" :disabled="isLoading || isRewriting || manualEditCount === 0" @click="applyManualEdits">
+                  保存并应用编辑 ({{ manualEditCount }} 待提交)
+                </button>
+                <button class="btn btn-text" :disabled="manualEditCount === 0" @click="resetEdits">撤销修改</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Batch Area -->
+          <div class="card auto-height">
+            <div class="card-head">
+              <h2>批量平滑改写</h2>
+              <span class="chip">将其余记录均匀散布到指定窗口内</span>
+            </div>
+            <div class="form-body">
+              <div class="form-grid compact">
+                <label class="field">
+                  <span>分配开始日期</span>
+                  <input v-model="batchForm.startDate" type="date" />
+                </label>
+                <label class="field">
+                  <span>分配结束日期</span>
+                  <input v-model="batchForm.endDate" type="date" />
+                </label>
+                <label class="field">
+                  <span>每日活跃起点</span>
+                  <input v-model="batchForm.startTime" type="time" />
+                </label>
+                <label class="field">
+                  <span>每日活跃终点</span>
+                  <input v-model="batchForm.endTime" type="time" />
+                </label>
+                <label class="field">
+                  <span>批量作者名称 <span class="opt">(可选)</span></span>
+                  <input v-model="batchForm.authorName" placeholder="不填则保持原样" />
+                </label>
+                <label class="field">
+                  <span>批量作者邮箱 <span class="opt">(可选)</span></span>
+                  <input v-model="batchForm.authorEmail" placeholder="不填则保持原样" />
+                </label>
+              </div>
+              <div class="actions-row mt-4">
+                <button class="btn btn-primary bg-indigo" :disabled="isLoading || isRewriting || !hasHistory" @click="applyBatchTimelineEdits">
+                  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" class="mr-1">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  执行时间线批量重写
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Logs Area -->
+          <div class="card flex-grow min-h-[160px]">
+            <div class="card-head">
+              <h2>运行日志</h2>
+              <button class="btn btn-text btn-xs" @click="clearLogs">清空</button>
+            </div>
+            <div class="log-box" ref="logContentRef">
+              <div v-if="logs.length === 0" class="log-empty">日志模块休眠中...</div>
+              <div v-for="(item, index) in logs" :key="`${index}-${item}`" class="log-item">
+                <span class="log-icon">›</span> <span class="log-text">{{ item }}</span>
+              </div>
+            </div>
+          </div>
         </div>
-        <p class="hint">在下方表格修改后统一提交，可同时改 message、作者、时间。</p>
-        <button
-          class="btn btn-secondary"
-          :disabled="isLoading || isRewriting || manualEditCount === 0"
-          @click="applyManualEdits"
-        >
-          提交手动修改
-        </button>
-      </article>
-    </section>
-
-    <section class="panel" aria-label="提交历史列表区">
-      <div class="panel-head">
-        <h2>提交历史</h2>
-        <span class="chip">总数 {{ commits.length }}</span>
       </div>
-
-      <div v-if="isLoading" class="placeholder">正在读取 Git 历史...</div>
-      <div v-else-if="!hasHistory" class="placeholder">尚未加载提交历史</div>
-
-      <div v-else class="table-wrap">
-        <table class="commit-table">
-          <thead>
-            <tr>
-              <th>提交</th>
-              <th>原 message</th>
-              <th>新 message</th>
-              <th>作者</th>
-              <th>作者邮箱</th>
-              <th>作者时间</th>
-              <th>提交时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="commit in commits" :key="commit.id">
-              <td class="mono">{{ commit.id.slice(0, 8) }}</td>
-              <td class="text-col">{{ commit.message }}</td>
-              <td>
-                <input v-model="getOrCreateEdit(commit.id).message" placeholder="不填则不改" />
-              </td>
-              <td>
-                <input
-                  v-model="getOrCreateEdit(commit.id).authorName"
-                  :placeholder="commit.authorName"
-                />
-              </td>
-              <td>
-                <input
-                  v-model="getOrCreateEdit(commit.id).authorEmail"
-                  :placeholder="commit.authorEmail"
-                />
-              </td>
-              <td>
-                <input
-                  v-model="getOrCreateEdit(commit.id).authorDate"
-                  :placeholder="formatDate(commit.authorDate)"
-                />
-              </td>
-              <td>
-                <input
-                  v-model="getOrCreateEdit(commit.id).committerDate"
-                  :placeholder="formatDate(commit.committerDate)"
-                />
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel log-panel" aria-label="运行日志">
-      <div class="panel-head">
-        <h2>运行日志</h2>
-        <button class="btn btn-secondary btn-xs" @click="clearLogs">清空</button>
-      </div>
-      <div ref="logContentRef" class="log-content">
-        <p v-if="logs.length === 0" class="placeholder">暂无日志，操作后将显示运行记录</p>
-        <p v-for="(entry, i) in logs" :key="i" class="log-entry">{{ entry }}</p>
-      </div>
-    </section>
+    </main>
   </div>
 </template>
 
 <style scoped>
 .app-shell {
-  min-height: 100vh;
-  background:
-    radial-gradient(circle at 10% 0%, rgba(34, 197, 94, 0.16), transparent 30%),
-    radial-gradient(circle at 100% 20%, rgba(51, 65, 85, 0.45), transparent 28%),
-    linear-gradient(160deg, #0f172a 0%, #101c2e 45%, #15253b 100%);
-  color: #f8fafc;
-  padding: 24px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: #f7f9fb;
+  color: #0f172a;
+  overflow: hidden;
+  font-family: inherit;
 }
 
-.hero {
-  margin-bottom: 18px;
+/* Top Bar */
+.window-bar {
+  height: 48px;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  user-select: none;
+  border-bottom: 1px solid #e2e8f0;
+  flex-shrink: 0;
 }
 
-.tag {
-  display: inline-flex;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(34, 197, 94, 0.18);
-  color: #86efac;
-  font-family: 'JetBrains Mono', 'Consolas', monospace;
-  font-size: 12px;
-}
-
-h1,
-h2 {
-  margin: 10px 0;
-}
-
-h1 {
-  font-size: 34px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-h2 {
-  font-size: 22px;
+.window-title {
+  font-size: 14px;
   font-weight: 600;
+  color: #334155;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.desc {
-  color: #cbd5e1;
+.app-icon {
+  width: 18px;
+  height: 18px;
+  color: #2563eb;
 }
 
-.panel {
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 16px;
-  background: rgba(15, 23, 42, 0.78);
-  box-shadow: 0 18px 40px rgba(2, 6, 23, 0.35);
-  backdrop-filter: blur(8px);
-  padding: 16px;
-  margin-bottom: 14px;
+.window-actions {
+  display: flex;
+  gap: 8px;
 }
 
-.toolbar-grid {
-  display: grid;
-  grid-template-columns: 130px 1fr 120px;
+.win-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.win-btn:hover {
+  background: #f1f5f9;
+}
+
+.win-close:hover {
+  background: #fee2e2;
+}
+.win-close:hover svg path {
+  stroke: #ef4444;
+}
+
+/* Main Layout */
+.main-layout {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.top-bar {
+  padding: 24px 32px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-shrink: 0;
+}
+
+.repo-status {
+  display: flex;
+  align-items: center;
   gap: 12px;
+  background: #ffffff;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+  flex: 1;
 }
 
-.panel-head {
+.status-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #cbd5e1;
+  box-shadow: inset 0 0 0 2px #fff, 0 0 0 2px #cbd5e1;
+}
+.status-indicator.active {
+  background: #10b981;
+  box-shadow: inset 0 0 0 2px #fff, 0 0 0 2px #10b981;
+}
+
+.status-texts {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.repo-path {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.status-msg {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.workspace-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(380px, 45%) minmax(420px, 1fr);
+  gap: 24px;
+  padding: 0 32px 24px;
+  overflow: hidden;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 16px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.col-left {
+  min-height: 0;
+}
+
+.col-right {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding-right: 12px; /* For scrollbar margins */
+  padding-bottom: 24px;
+}
+
+.col-right::-webkit-scrollbar {
+  width: 6px;
+}
+.col-right::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 8px;
+}
+
+.auto-height {
+  flex: 0 0 auto;
+}
+
+.flex-grow {
+  flex: 1 1 0;
+}
+.min-h-160 {
+  min-height: 160px;
+}
+
+.card-head {
+  padding: 16px 24px;
+  border-bottom: 1px solid #f1f5f9;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  background: #ffffff;
+}
+
+.card-head h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 0;
 }
 
 .chip {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #f1f5f9;
+  color: #475569;
+  padding: 4px 12px;
   border-radius: 999px;
-  padding: 2px 10px;
   font-size: 12px;
+  font-weight: 500;
+}
+
+.blue-chip {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.card-body {
+  flex: 1;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.form-body {
+  padding: 20px 24px;
+}
+
+.scroll-y {
+  overflow-y: auto;
+}
+
+/* Timeline Left Layout */
+.timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.timeline-item {
+  display: flex;
+  align-items: stretch;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.timeline-item:hover {
+  background: #f8fafc;
+  border-color: #f1f5f9;
+}
+
+.timeline-item.active {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.graph {
+  position: relative;
+  width: calc(var(--lane-count) * 16px + 12px);
+  min-width: 40px;
+  flex-shrink: 0;
+}
+
+.graph-line {
+  position: absolute;
+  top: -12px;
+  bottom: -12px;
+  width: 2px;
+  background: #e2e8f0;
+  border-radius: 2px;
+}
+
+.graph-node {
+  position: absolute;
+  top: 14px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.06);
+  z-index: 2;
+}
+
+.timeline-content {
+  flex: 1;
+  min-width: 0;
+  padding-top: 8px;
+}
+
+.timeline-top {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 6px;
+}
+
+.message {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1e293b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timeline-item.active .message {
+  color: #1d4ed8;
+}
+
+.timeline-bottom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.commit-id {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  color: #2563eb;
+  background: #e5f0ff;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.meta {
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+}
+
+.meta-dot {
   color: #cbd5e1;
 }
 
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 12px 0;
+.ml-auto {
+  margin-left: auto;
 }
 
-.ops-grid {
+.badge {
+  background: #fef3c7;
+  color: #b45309;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Forms */
+.form-grid {
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.form-grid.compact {
   gap: 14px;
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.field.full {
+  margin-bottom: 16px;
 }
 
 .field span {
-  color: #94a3b8;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
 }
 
-input {
-  width: 100%;
-  border: 1px solid rgba(100, 116, 139, 0.45);
+.opt {
+  font-weight: 400;
+  color: #94a3b8;
+}
+
+input, textarea {
+  padding: 12px 14px;
   border-radius: 10px;
-  background: rgba(30, 41, 59, 0.72);
-  color: #f8fafc;
-  padding: 8px 10px;
-  transition: border-color 0.2s ease;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  font-size: 13px;
+  color: #1e293b;
+  font-family: inherit;
+  transition: all 0.2s ease;
 }
 
-input::placeholder {
+input::placeholder, textarea::placeholder {
   color: #94a3b8;
 }
 
-input:focus {
-  border-color: #22c55e;
+input:focus, textarea:focus {
   outline: none;
+  background: #ffffff;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
+
+textarea {
+  resize: vertical;
+  min-height: 52px;
+}
+
+/* Buttons */
+.actions-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.mt-4 { margin-top: 16px; }
+.mt-2 { margin-top: 8px; }
+.mr-1 { margin-right: 4px; }
 
 .btn {
-  cursor: pointer;
-  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 18px;
   border-radius: 10px;
-  padding: 10px 12px;
+  font-size: 13px;
   font-weight: 600;
-  transition:
-    transform 0.2s ease,
-    opacity 0.2s ease,
-    filter 0.2s ease;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-.btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  filter: brightness(1.06);
+.btn-large {
+  padding: 12px 24px;
+  font-size: 14px;
+  border-radius: 12px;
+}
+
+.btn-icon {
+  /* Using standard padding */
 }
 
 .btn:disabled {
-  opacity: 0.52;
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
 .btn-primary {
-  color: #052e16;
-  background: linear-gradient(120deg, #22c55e 0%, #4ade80 100%);
+  background: #2563eb;
+  color: #ffffff;
+}
+.btn-primary:not(:disabled):hover {
+  background: #1d4ed8;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
 }
 
-.btn-secondary {
-  color: #e2e8f0;
-  background: linear-gradient(120deg, #334155 0%, #475569 100%);
+.bg-indigo {
+  background: #4f46e5;
+}
+.bg-indigo:not(:disabled):hover {
+  background: #4338ca;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);
 }
 
-.status {
-  margin-top: 10px;
-  color: #bbf7d0;
+.shadow-brand {
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
 }
 
-.error {
-  margin-top: 6px;
-  color: #fca5a5;
+.btn-text {
+  background: transparent;
+  color: #64748b;
 }
-
-.hint,
-.placeholder {
-  color: #cbd5e1;
-}
-
-.table-wrap {
-  overflow: auto;
-  border-radius: 12px;
-  border: 1px solid rgba(100, 116, 139, 0.3);
-}
-
-.commit-table {
-  width: 100%;
-  border-collapse: collapse;
-  min-width: 1180px;
-}
-
-.commit-table th,
-.commit-table td {
-  border-bottom: 1px solid rgba(100, 116, 139, 0.22);
-  padding: 8px;
-  vertical-align: top;
-  font-size: 13px;
-}
-
-.commit-table th {
-  text-align: left;
-  background: rgba(30, 41, 59, 0.72);
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-
-.commit-table tr:hover {
-  background: rgba(34, 197, 94, 0.1);
-}
-
-.text-col {
-  min-width: 220px;
-}
-
-.mono {
-  font-family: 'JetBrains Mono', 'Consolas', monospace;
-}
-
-@media (max-width: 1100px) {
-  .toolbar-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .ops-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-
-  h1 {
-    font-size: 28px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .btn,
-  input {
-    transition: none;
-  }
-}
-
-/* 日志面板 */
-.log-panel {
-  margin-top: 0;
-}
-
-.log-content {
-  height: 160px;
-  overflow-y: auto;
-  border-radius: 10px;
-  border: 1px solid rgba(100, 116, 139, 0.3);
-  background: rgba(2, 6, 23, 0.72);
-  padding: 10px 12px;
-  margin-top: 10px;
-}
-
-.log-entry {
-  font-family: 'JetBrains Mono', 'Consolas', monospace;
-  font-size: 12px;
-  color: #86efac;
-  margin: 2px 0;
-  white-space: pre-wrap;
-  word-break: break-all;
+.btn-text:hover {
+  background: #f1f5f9;
+  color: #334155;
 }
 
 .btn-xs {
-  padding: 4px 10px;
+  padding: 4px 12px;
+  border-radius: 8px;
+}
+
+/* Logs */
+.log-box {
+  background: #1e293b;
+  border-radius: 12px;
+  padding: 16px;
+  margin: 16px 20px 20px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 100px;
+  font-family: 'JetBrains Mono', Consolas, monospace;
   font-size: 12px;
+  line-height: 1.6;
+}
+
+.log-empty {
+  color: #64748b;
+  text-align: center;
+  margin-top: 20px;
+}
+
+.log-item {
+  color: #e2e8f0;
+  margin-bottom: 6px;
+  display: flex;
+  gap: 10px;
+}
+
+.log-icon {
+  color: #38bdf8;
+  font-weight: bold;
+}
+
+.log-text {
+  word-break: break-all;
+}
+
+.placeholder {
+  color: #94a3b8;
+  text-align: center;
+  margin-top: 40px;
+  font-size: 14px;
+}
+.placeholder.small {
+  margin-top: 20px;
+  margin-bottom: 20px;
+}
+
+.error-banner {
+  margin: 0 32px 16px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #ef4444;
+  border: 1px solid #fecaca;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
 }
 </style>
