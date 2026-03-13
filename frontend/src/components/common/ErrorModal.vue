@@ -1,39 +1,23 @@
 <script setup lang="ts">
-withDefaults(
-  defineProps<{
-    visible: boolean
-    title: string
-    text: string
-    confirmLabel?: string
-    variant?: 'default' | 'danger'
-  }>(),
-  {
-    confirmLabel: '确认执行',
-    variant: 'default',
-  },
-)
+defineProps<{
+  visible: boolean
+  title: string
+  text: string
+}>()
 
 const emit = defineEmits<{
-  (event: 'cancel'): void
-  (event: 'confirm'): void
+  (event: 'close'): void
 }>()
 </script>
 
 <template>
   <div v-if="visible" class="modal-mask">
-    <div class="modal-card confirm-card">
-      <div class="modal-icon" :class="{ danger: variant === 'danger' }">!</div>
+    <div class="modal-card">
+      <div class="modal-icon">!</div>
       <div class="modal-title">{{ title }}</div>
       <div class="modal-text">{{ text }}</div>
-      <div class="actions-row modal-actions">
-        <button class="btn btn-text" @click="emit('cancel')">取消</button>
-        <button
-          class="btn"
-          :class="variant === 'danger' ? 'btn-danger' : 'btn-primary'"
-          @click="emit('confirm')"
-        >
-          {{ confirmLabel }}
-        </button>
+      <div class="modal-actions">
+        <button class="btn btn-danger" @click="emit('close')">我知道了</button>
       </div>
     </div>
   </div>
@@ -47,17 +31,20 @@ const emit = defineEmits<{
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 9999;
+  z-index: 10000;
 }
 
 .modal-card {
-  width: min(460px, calc(100vw - 40px));
+  width: min(380px, calc(100vw - 28px));
+  max-height: min(360px, calc(100vh - 32px));
   background: #ffffff;
   border-radius: 16px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid #fecaca;
   box-shadow: 0 24px 56px rgba(15, 23, 42, 0.26);
-  padding: 24px;
+  padding: 18px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
 }
 
 .modal-icon {
@@ -68,37 +55,33 @@ const emit = defineEmits<{
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: #eff6ff;
-  color: #1d4ed8;
-  font-size: 20px;
-  font-weight: 700;
-}
-
-.modal-icon.danger {
   background: #fef2f2;
   color: #dc2626;
+  font-size: 20px;
+  font-weight: 700;
 }
 
 .modal-title {
   font-size: 16px;
   font-weight: 700;
-  color: #0f172a;
+  color: #7f1d1d;
 }
 
 .modal-text {
   margin-top: 8px;
   font-size: 13px;
-  color: #475569;
-}
-
-.actions-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  color: #991b1b;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+  max-height: 160px;
+  text-align: left;
+  padding-right: 4px;
 }
 
 .modal-actions {
   margin-top: 18px;
+  display: flex;
   justify-content: center;
 }
 
@@ -115,15 +98,6 @@ const emit = defineEmits<{
   transition: all 0.2s ease;
 }
 
-.btn-primary {
-  background: #2563eb;
-  color: #ffffff;
-}
-
-.btn-primary:hover {
-  background: #1d4ed8;
-}
-
 .btn-danger {
   background: #dc2626;
   color: #ffffff;
@@ -131,15 +105,5 @@ const emit = defineEmits<{
 
 .btn-danger:hover {
   background: #b91c1c;
-}
-
-.btn-text {
-  background: transparent;
-  color: #64748b;
-}
-
-.btn-text:hover {
-  background: #f1f5f9;
-  color: #334155;
 }
 </style>

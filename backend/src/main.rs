@@ -4,8 +4,8 @@
 mod git_history;
 
 use git_history::{
-    force_push_origin_impl, get_git_history_impl, rewrite_git_history_impl, set_git_origin_impl,
-    RewriteRequest,
+    force_push_origin_impl, get_git_history_impl, get_git_origin_impl, rewrite_git_history_impl,
+    set_git_origin_impl, RewriteRequest,
 };
 
 #[tauri::command]
@@ -28,6 +28,11 @@ fn force_push_origin(app: tauri::AppHandle, repo_path: String) -> Result<String,
     force_push_origin_impl(&app, &repo_path)
 }
 
+#[tauri::command]
+fn get_git_origin(app: tauri::AppHandle, repo_path: String) -> Result<String, String> {
+    get_git_origin_impl(&app, &repo_path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -36,7 +41,8 @@ pub fn run() {
             get_git_history,
             rewrite_git_history,
             set_git_origin,
-            force_push_origin
+            force_push_origin,
+            get_git_origin
         ])
         .run(tauri::generate_context!())
         .expect("tauri app 运行失败");

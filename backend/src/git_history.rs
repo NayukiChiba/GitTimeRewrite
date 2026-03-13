@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 #[cfg(target_os = "windows")]
@@ -72,22 +76,32 @@ pub fn rewrite_git_history_impl(app: &AppHandle, request: RewriteRequest) -> Res
     let env_filter = build_env_filter_script(&request.edits);
     let msg_filter = build_msg_filter_script(&request.edits);
 
+    let env_filter_file = create_filter_script_file("env_filter", &env_filter)?;
+    let msg_filter_file = create_filter_script_file("msg_filter", &msg_filter)?;
+    let env_filter_runner = build_source_script_expression(&env_filter_file);
+    let msg_filter_runner = build_source_script_expression(&msg_filter_file);
+
     emit_log(app, "正在执行 git filter-branch，请稍候...");
-    let output = run_git_command(
+    let output_result = run_git_command(
         &request.repo_path,
         &[
             "filter-branch",
             "-f",
             "--env-filter",
-            &env_filter,
+            &env_filter_runner,
             "--msg-filter",
-            &msg_filter,
+            &msg_filter_runner,
             "--tag-name-filter",
             "cat",
             "--",
             "--all",
         ],
-    )?;
+    );
+
+    let _ = fs::remove_file(&env_filter_file);
+    let _ = fs::remove_file(&msg_filter_file);
+
+    let output = output_result?;
 
     emit_log(app, &format!("改写完成，共处理 {} 条提交", request.edits.len()));
     Ok(RewriteResult {
@@ -128,6 +142,17 @@ pub fn force_push_origin_impl(app: &AppHandle, repo_path: &str) -> Result<String
     Ok(output)
 }
 
+pub fn get_git_origin_impl(app: &AppHandle, repo_path: &str) -> Result<String, String> {
+    emit_log(app, &format!("正在验证 Git 仓库: {repo_path}"));
+    ensure_git_repo(repo_path)?;
+
+    let origin = run_git_command(repo_path, &["remote", "get-url", "origin"])
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    Ok(origin)
+}
+
 fn emit_log(app: &AppHandle, message: &str) {
     app.emit("log", message).ok();
 }
@@ -152,20 +177,66 @@ fn run_git_command(repo_path: &str, args: &[&str]) -> Result<String, String> {
 
     let result = command
         .output()
-        .map_err(|e| format!("执行 git 失败: {e}"))?;
+        .map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                "系统未安装 Git，请先安装 Git 并重启应用".to_string()
+            } else {
+                format!("执行 git 失败: {e}")
+            }
+        })?;
 
     if !result.status.success() {
         let stderr = String::from_utf8_lossy(&result.stderr);
         let stdout = String::from_utf8_lossy(&result.stdout);
+        let command_name = args.first().copied().unwrap_or("<unknown>");
+        let stderr_summary = shorten_for_error(stderr.trim());
+        let stdout_summary = shorten_for_error(stdout.trim());
         return Err(format!(
             "git 命令执行失败: git {}\nstdout:\n{}\nstderr:\n{}",
-            args.join(" "),
-            stdout,
-            stderr
+            command_name,
+            stdout_summary,
+            stderr_summary
         ));
     }
 
     Ok(String::from_utf8_lossy(&result.stdout).to_string())
+}
+
+fn create_filter_script_file(prefix: &str, content: &str) -> Result<PathBuf, String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("生成时间戳失败: {e}"))?
+        .as_millis();
+    let file_name = format!("gitTimeRewrite_{}_{}.sh", prefix, timestamp);
+    let file_path = std::env::temp_dir().join(file_name);
+    fs::write(&file_path, content).map_err(|e| format!("写入过滤脚本失败: {e}"))?;
+    Ok(file_path)
+}
+
+fn build_source_script_expression(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let escaped = normalized.replace('\'', "'\"'\"'");
+    format!(". '{}'", escaped)
+}
+
+fn shorten_for_error(text: &str) -> String {
+    if text.is_empty() {
+        return "<empty>".to_string();
+    }
+
+    let compact = text
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .take(12)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if compact.len() > 1000 {
+        format!("{}...", &compact[..1000])
+    } else {
+        compact
+    }
 }
 
 fn parse_git_log_output(raw: &str) -> Vec<GitCommit> {

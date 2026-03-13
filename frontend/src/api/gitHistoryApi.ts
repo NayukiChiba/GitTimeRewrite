@@ -16,3 +16,7 @@ export async function setGitOrigin(repoPath: string, originUrl: string): Promise
 export async function forcePushOrigin(repoPath: string): Promise<string> {
   return invoke<string>('force_push_origin', { repoPath })
 }
+
+export async function getGitOrigin(repoPath: string): Promise<string> {
+  return invoke<string>('get_git_origin', { repoPath })
+}

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 defineProps<{
   repoPath: string
+  originUrl: string
   statusText: string
   isLoading: boolean
   isRewriting: boolean
@@ -42,6 +43,7 @@ const emit = defineEmits<{
       <div class="status-indicator" :class="{ active: repoPath }"></div>
       <div class="status-texts">
         <span class="repo-path" :title="repoPath">{{ repoPath || '未选择仓库' }}</span>
+        <span class="status-msg" v-if="originUrl" :title="originUrl">origin: {{ originUrl }}</span>
         <span class="status-msg" v-if="statusText">{{ statusText }}</span>
       </div>
     </div>
@@ -114,7 +116,8 @@ const emit = defineEmits<{
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 18px;
+  height: 40px;
+  padding: 0 14px;
   border-radius: 10px;
   font-size: 13px;
   font-weight: 600;

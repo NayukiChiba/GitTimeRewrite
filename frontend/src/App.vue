@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import {
   forcePushOrigin,
+  getGitOrigin,
   getGitHistory,
   rewriteGitHistory,
   setGitOrigin,
@@ -13,6 +14,8 @@ import { buildTimelineBatchEdits } from '@/utils/timelineScheduler'
 import type { CommitEdit, GitCommit } from '@/types/gitHistory'
 import BusyModal from '@/components/common/BusyModal.vue'
 import ConfirmModal from '@/components/common/ConfirmModal.vue'
+import ErrorModal from '@/components/common/ErrorModal.vue'
+import OriginModal from '@/components/common/OriginModal.vue'
 import GitTimelinePanel from '@/components/git/GitTimelinePanel.vue'
 import RepoTopBar from '@/components/layout/RepoTopBar.vue'
 import WindowBar from '@/components/layout/WindowBar.vue'
@@ -42,6 +45,7 @@ const isLoading = ref(false)
 const isRewriting = ref(false)
 const statusText = ref('请选择一个 Git 仓库')
 const errorText = ref('')
+const originUrl = ref('')
 const logs = ref<string[]>([])
 const workspaceRef = ref<HTMLElement | null>(null)
 const leftPaneWidth = ref(460)
@@ -64,7 +68,15 @@ const busyText = ref('')
 const isConfirmModalVisible = ref(false)
 const confirmTitle = ref('')
 const confirmText = ref('')
+const confirmButtonText = ref('确认执行')
+const confirmVariant = ref<'default' | 'danger'>('default')
+const confirmMode = ref<'rewrite' | 'forcePush'>('rewrite')
 const pendingEdits = ref<CommitEdit[]>([])
+const isErrorModalVisible = ref(false)
+const errorModalTitle = ref('操作失败')
+const errorModalText = ref('')
+const isOriginModalVisible = ref(false)
+const originInput = ref('')
 
 let unlistenLog: (() => void) | null = null
 let resizeStartX = 0
@@ -145,20 +157,91 @@ function hideBusyModal() {
   isBusyModalVisible.value = false
 }
 
-function openConfirmModal(edits: CommitEdit[], title: string, text: string) {
+function openConfirmModal(
+  edits: CommitEdit[],
+  title: string,
+  text: string,
+  options?: {
+    mode?: 'rewrite' | 'forcePush'
+    buttonText?: string
+    variant?: 'default' | 'danger'
+  },
+) {
   pendingEdits.value = edits
   confirmTitle.value = title
   confirmText.value = text
+  confirmMode.value = options?.mode ?? 'rewrite'
+  confirmButtonText.value = options?.buttonText ?? '确认执行'
+  confirmVariant.value = options?.variant ?? 'default'
   isConfirmModalVisible.value = true
 }
 
 function closeConfirmModal() {
   isConfirmModalVisible.value = false
   pendingEdits.value = []
+  confirmMode.value = 'rewrite'
+  confirmButtonText.value = '确认执行'
+  confirmVariant.value = 'default'
 }
 
 function resetFeedback() {
   errorText.value = ''
+}
+
+function extractReadableError(rawError: unknown): string {
+  const rawText = String(rawError ?? '').trim()
+  if (!rawText) {
+    return '发生未知错误'
+  }
+
+  if (rawText.includes('git filter-branch')) {
+    return '批量改写失败：请检查提交历史与时间参数，详细原因见日志'
+  }
+
+  if (rawText.includes('系统未安装 Git')) {
+    return '系统未安装 Git，请先安装 Git 并重启应用'
+  }
+
+  if (rawText.includes('路径不是有效 Git 仓库')) {
+    return '当前路径不是有效的 Git 仓库'
+  }
+
+  const stderrMarker = 'stderr:\n'
+  const stderrIndex = rawText.indexOf(stderrMarker)
+  const stderrText = stderrIndex >= 0 ? rawText.slice(stderrIndex + stderrMarker.length) : rawText
+
+  const lines = stderrText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  const preferredLine = lines.find((line) =>
+    /fatal:|error:|not found|failed|失败|无效|denied/i.test(line),
+  )
+  if (preferredLine) {
+    return preferredLine
+  }
+
+  const compact = lines.slice(0, 2).join(' | ')
+  if (compact.length > 180) {
+    return `${compact.slice(0, 180)}...`
+  }
+
+  return compact || '操作失败，请查看日志详情'
+}
+
+function closeErrorModal() {
+  isErrorModalVisible.value = false
+}
+
+function showErrorPopup(error: unknown, prefix: string) {
+  const rawMessage = String(error)
+  const readableMessage = `${prefix}: ${extractReadableError(error)}`
+  errorText.value = readableMessage
+  addLog(`${prefix}: ${rawMessage}`)
+  errorModalTitle.value = prefix
+  errorModalText.value = extractReadableError(error)
+  isErrorModalVisible.value = true
 }
 
 function normalizeRepoPath(selectedPath: string) {
@@ -216,7 +299,7 @@ async function pickRepoFolder() {
 
 async function refreshHistory() {
   if (!repoPath.value) {
-    errorText.value = '请先选择项目目录'
+    showErrorPopup('请先选择项目目录', '加载失败')
     return
   }
 
@@ -226,6 +309,7 @@ async function refreshHistory() {
     showBusyModal('正在加载 Git 历史', '正在读取提交记录，请稍候...')
     addLog(`开始加载仓库历史: ${repoPath.value}`)
     commits.value = await getGitHistory(repoPath.value)
+    originUrl.value = await getGitOrigin(repoPath.value)
     statusText.value = `已加载 ${commits.value.length} 条提交历史`
 
     if (commits.value.length > 0) {
@@ -235,8 +319,7 @@ async function refreshHistory() {
       }
     }
   } catch (error) {
-    errorText.value = String(error)
-    addLog(`加载失败: ${String(error)}`)
+    showErrorPopup(error, '加载失败')
   } finally {
     isLoading.value = false
     hideBusyModal()
@@ -247,7 +330,7 @@ async function applyManualEdits() {
   const edits = Object.values(editMap).filter((edit) => hasPendingChanges(edit))
 
   if (edits.length === 0) {
-    errorText.value = '没有可提交的手动修改'
+    showErrorPopup('没有可提交的手动修改', '提交失败')
     return
   }
 
@@ -256,7 +339,7 @@ async function applyManualEdits() {
 
 async function applyBatchTimelineEdits() {
   if (!hasHistory.value) {
-    errorText.value = '当前没有提交历史可编辑'
+    showErrorPopup('当前没有提交历史可编辑', '批量编辑失败')
     return
   }
 
@@ -278,11 +361,17 @@ async function applyBatchTimelineEdits() {
 
     openConfirmModal(edits, '确认批量更改', `即将批量改写 ${edits.length} 条提交，是否继续？`)
   } catch (error) {
-    errorText.value = String(error)
+    showErrorPopup(error, '批量编辑失败')
   }
 }
 
-async function confirmRewrite() {
+async function confirmAction() {
+  if (confirmMode.value === 'forcePush') {
+    closeConfirmModal()
+    await executeForcePush()
+    return
+  }
+
   if (pendingEdits.value.length === 0) {
     closeConfirmModal()
     return
@@ -295,7 +384,7 @@ async function confirmRewrite() {
 
 async function executeRewrite(edits: CommitEdit[]) {
   if (!repoPath.value) {
-    errorText.value = '请先选择项目目录'
+    showErrorPopup('请先选择项目目录', '改写失败')
     return
   }
 
@@ -310,8 +399,7 @@ async function executeRewrite(edits: CommitEdit[]) {
     resetEdits()
     await refreshHistory()
   } catch (error) {
-    errorText.value = String(error)
-    addLog(`改写失败: ${String(error)}`)
+    showErrorPopup(error, '改写失败')
   } finally {
     isRewriting.value = false
     hideBusyModal()
@@ -320,24 +408,46 @@ async function executeRewrite(edits: CommitEdit[]) {
 
 async function setupOrigin() {
   if (!repoPath.value) {
-    errorText.value = '请先选择项目目录'
+    showErrorPopup('请先选择项目目录', '读取 Origin 失败')
     return
   }
 
-  const input = window.prompt('请输入 origin 地址，例如：https://github.com/user/repo.git')
+  try {
+    const currentOrigin = originUrl.value || (await getGitOrigin(repoPath.value))
+    originUrl.value = currentOrigin
+    originInput.value = currentOrigin
+    isOriginModalVisible.value = true
+  } catch (error) {
+    showErrorPopup(error, '读取 Origin 失败')
+  }
+}
+
+function cancelOriginModal() {
+  isOriginModalVisible.value = false
+}
+
+async function saveOriginFromModal() {
+  if (!repoPath.value) {
+    showErrorPopup('请先选择项目目录', 'Origin 设置失败')
+    return
+  }
+
+  const input = originInput.value.trim()
   if (!input) {
+    showErrorPopup('Origin 地址不能为空', 'Origin 设置失败')
     return
   }
 
   try {
     isLoading.value = true
+    isOriginModalVisible.value = false
     showBusyModal('正在设置 Origin', '正在写入远程仓库地址，请稍候...')
     const result = await setGitOrigin(repoPath.value, input)
+    originUrl.value = result
     statusText.value = `Origin 已设置: ${result}`
     addLog(`Origin 设置完成: ${result}`)
   } catch (error) {
-    errorText.value = String(error)
-    addLog(`Origin 设置失败: ${String(error)}`)
+    showErrorPopup(error, 'Origin 设置失败')
   } finally {
     isLoading.value = false
     hideBusyModal()
@@ -346,15 +456,23 @@ async function setupOrigin() {
 
 async function runForcePush() {
   if (!repoPath.value) {
-    errorText.value = '请先选择项目目录'
+    showErrorPopup('请先选择项目目录', 'Force push 失败')
     return
   }
 
-  const confirmed = window.confirm('即将执行 force push 到 origin，是否继续？')
-  if (!confirmed) {
-    return
-  }
+  openConfirmModal(
+    [],
+    '确认 Force Push',
+    '即将强制推送到 origin，可能覆盖远端提交历史，请确认操作。',
+    {
+      mode: 'forcePush',
+      buttonText: '确认 Force Push',
+      variant: 'danger',
+    },
+  )
+}
 
+async function executeForcePush() {
   try {
     isRewriting.value = true
     showBusyModal('正在执行 Force Push', '正在推送到 origin，请不要关闭应用...')
@@ -362,8 +480,7 @@ async function runForcePush() {
     statusText.value = 'Force push 完成'
     addLog(`Force push 完成: ${output}`)
   } catch (error) {
-    errorText.value = String(error)
-    addLog(`Force push 失败: ${String(error)}`)
+    showErrorPopup(error, 'Force push 失败')
   } finally {
     isRewriting.value = false
     hideBusyModal()
@@ -438,6 +555,7 @@ onUnmounted(() => {
     <main class="main-layout">
       <RepoTopBar
         :repo-path="repoPath"
+        :origin-url="originUrl"
         :status-text="statusText"
         :is-loading="isLoading"
         :is-rewriting="isRewriting"
@@ -491,8 +609,23 @@ onUnmounted(() => {
       :visible="isConfirmModalVisible"
       :title="confirmTitle"
       :text="confirmText"
+      :confirm-label="confirmButtonText"
+      :variant="confirmVariant"
       @cancel="closeConfirmModal"
-      @confirm="confirmRewrite"
+      @confirm="confirmAction"
+    />
+    <OriginModal
+      v-model="originInput"
+      :visible="isOriginModalVisible"
+      :current-origin="originUrl"
+      @cancel="cancelOriginModal"
+      @confirm="saveOriginFromModal"
+    />
+    <ErrorModal
+      :visible="isErrorModalVisible"
+      :title="errorModalTitle"
+      :text="errorModalText"
+      @close="closeErrorModal"
     />
   </div>
 </template>
