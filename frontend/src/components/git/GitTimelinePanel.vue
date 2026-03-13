@@ -5,6 +5,9 @@ type TimelineRow = {
   commit: GitCommit
   lane: number
   laneCount: number
+  incomingLanes: number[]
+  outgoingLanes: number[]
+  edges: Array<{ from: number; to: number }>
   isMerge: boolean
 }
 
@@ -22,6 +25,23 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: 'select-commit', commitId: string): void
 }>()
+
+function laneX(lane: number): number {
+  return lane * 16 + 12
+}
+
+function edgePath(fromLane: number, toLane: number): string {
+  const fromX = laneX(fromLane)
+  const toX = laneX(toLane)
+  const startY = 22
+  const endY = 22
+  const controlY = 34
+  return `M ${fromX} ${startY} C ${fromX} ${controlY}, ${toX} ${controlY}, ${toX} ${endY}`
+}
+
+function graphWidth(laneCount: number): number {
+  return laneCount * 16 + 24
+}
 </script>
 
 <template>
@@ -44,17 +64,52 @@ const emit = defineEmits<{
           }"
           @click="emit('select-commit', row.commit.id)"
         >
-          <div class="graph" :style="{ '--lane-count': `${row.laneCount}` }">
-            <span
-              v-for="lane in row.laneCount"
-              :key="`line-${row.commit.id}-${lane}`"
-              class="graph-line"
-              :style="{ left: `${(lane - 1) * 16 + 12}px` }"
-            />
-            <span
-              class="graph-node"
-              :style="{ left: `${row.lane * 16 + 8}px`, backgroundColor: laneColor(row.lane) }"
-            />
+          <div class="graph">
+            <svg
+              class="graph-svg"
+              :width="graphWidth(row.laneCount)"
+              height="44"
+              aria-hidden="true"
+            >
+              <line
+                v-for="lane in row.incomingLanes"
+                :key="`line-in-${row.commit.id}-${lane}`"
+                class="graph-line"
+                :x1="laneX(lane)"
+                :x2="laneX(lane)"
+                :style="{ stroke: laneColor(lane) }"
+                y1="-6"
+                y2="22"
+              />
+
+              <line
+                v-for="lane in row.outgoingLanes"
+                :key="`line-out-${row.commit.id}-${lane}`"
+                class="graph-line"
+                :x1="laneX(lane)"
+                :x2="laneX(lane)"
+                :style="{ stroke: laneColor(lane) }"
+                y1="22"
+                y2="58"
+              />
+
+              <path
+                v-for="(edge, edgeIndex) in row.edges"
+                :key="`edge-${row.commit.id}-${edgeIndex}`"
+                v-show="edge.from !== edge.to"
+                class="graph-edge"
+                :d="edgePath(edge.from, edge.to)"
+                :style="{ stroke: laneColor(edge.from) }"
+              />
+
+              <circle
+                class="graph-node"
+                :cx="laneX(row.lane)"
+                cy="22"
+                r="6"
+                :fill="laneColor(row.lane)"
+              />
+            </svg>
           </div>
           <div class="timeline-content">
             <div class="timeline-top">
@@ -132,13 +187,13 @@ const emit = defineEmits<{
 .timeline-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
 }
 
 .timeline-item {
   display: flex;
   align-items: stretch;
-  padding: 12px 14px;
+  padding: 8px 14px;
   border-radius: 10px;
   border: 1px solid transparent;
   background: transparent;
@@ -163,35 +218,38 @@ const emit = defineEmits<{
 
 .graph {
   position: relative;
-  width: calc(var(--lane-count) * 16px + 12px);
+  width: fit-content;
   min-width: 40px;
   flex-shrink: 0;
 }
 
+.graph-svg {
+  display: block;
+  overflow: visible;
+}
+
 .graph-line {
-  position: absolute;
-  top: -12px;
-  bottom: -12px;
-  width: 2px;
-  background: #e2e8f0;
-  border-radius: 2px;
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.95;
+}
+
+.graph-edge {
+  stroke-width: 2;
+  stroke-linecap: round;
+  fill: none;
+  opacity: 0.9;
 }
 
 .graph-node {
-  position: absolute;
-  top: 14px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 2px solid #ffffff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
-  z-index: 2;
+  stroke: rgba(255, 255, 255, 0.75);
+  stroke-width: 1.5;
 }
 
 .timeline-content {
   flex: 1;
   min-width: 0;
-  padding-top: 8px;
+  padding-top: 4px;
 }
 
 .timeline-top {

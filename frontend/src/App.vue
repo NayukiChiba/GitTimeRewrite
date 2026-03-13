@@ -25,6 +25,9 @@ type TimelineRow = {
   commit: GitCommit
   lane: number
   laneCount: number
+  incomingLanes: number[]
+  outgoingLanes: number[]
+  edges: Array<{ from: number; to: number }>
   isMerge: boolean
 }
 
@@ -101,35 +104,94 @@ const currentCommit = computed(() =>
 
 const timelineRows = computed<TimelineRow[]>(() => {
   const latestFirst = [...commits.value].reverse()
-  const lanes: string[] = []
+  const lanes: Array<string | null> = []
   const rows: TimelineRow[] = []
 
+  const findLaneByCommit = (commitId: string): number =>
+    lanes.findIndex((value) => value === commitId)
+
+  const allocateLane = (): number => {
+    const freeLane = lanes.findIndex((value) => value === null)
+    if (freeLane >= 0) {
+      return freeLane
+    }
+    lanes.push(null)
+    return lanes.length - 1
+  }
+
+  const collapseMergedLanes = () => {
+    const seen = new Set<string>()
+    for (let index = 0; index < lanes.length; index += 1) {
+      const laneCommit = lanes[index]
+      if (!laneCommit) {
+        continue
+      }
+      if (seen.has(laneCommit)) {
+        lanes[index] = null
+        continue
+      }
+      seen.add(laneCommit)
+    }
+  }
+
+  const trimTrailingEmptyLanes = () => {
+    while (lanes.length > 0 && lanes[lanes.length - 1] === null) {
+      lanes.pop()
+    }
+  }
+
+  const getActiveLanes = (): number[] =>
+    lanes.map((value, index) => (value ? index : -1)).filter((index) => index >= 0)
+
   for (const commit of latestFirst) {
-    let lane = lanes.indexOf(commit.id)
+    let lane = findLaneByCommit(commit.id)
     if (lane < 0) {
-      lane = lanes.length
-      lanes.push(commit.id)
+      lane = allocateLane()
+      lanes[lane] = commit.id
     }
 
-    rows.push({
-      commit,
-      lane,
-      laneCount: Math.min(Math.max(lanes.length, lane + 1), 8),
-      isMerge: commit.parentIds.length > 1,
-    })
+    const incomingLanes = getActiveLanes()
+
+    const edges: Array<{ from: number; to: number }> = []
 
     const firstParent = commit.parentIds[0]
     if (firstParent) {
+      const firstParentLane = findLaneByCommit(firstParent)
+      edges.push({
+        from: lane,
+        to: firstParentLane >= 0 ? firstParentLane : lane,
+      })
       lanes[lane] = firstParent
     } else {
-      lanes.splice(lane, 1)
+      lanes[lane] = null
     }
 
     for (const parent of commit.parentIds.slice(1)) {
-      if (!lanes.includes(parent)) {
-        lanes.push(parent)
+      let parentLane = findLaneByCommit(parent)
+      if (parentLane < 0) {
+        parentLane = allocateLane()
+        lanes[parentLane] = parent
       }
+      edges.push({ from: lane, to: parentLane })
     }
+
+    collapseMergedLanes()
+    trimTrailingEmptyLanes()
+
+    const outgoingLanes = getActiveLanes()
+
+    const edgeMaxLane = edges.reduce((maxLane, edge) => Math.max(maxLane, edge.from, edge.to), lane)
+    const incomingMaxLane = incomingLanes.length > 0 ? Math.max(...incomingLanes) : 0
+    const outgoingMaxLane = outgoingLanes.length > 0 ? Math.max(...outgoingLanes) : 0
+    rows.push({
+      commit,
+      lane,
+      laneCount: Math.max(lanes.length, edgeMaxLane + 1, incomingMaxLane + 1, outgoingMaxLane + 1),
+      incomingLanes,
+      outgoingLanes,
+      edges,
+      isMerge: commit.parentIds.length > 1,
+    })
   }
 
   return rows
