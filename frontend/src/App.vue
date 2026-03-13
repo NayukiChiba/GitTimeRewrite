@@ -65,6 +65,7 @@ const editMap = reactive<Record<string, CommitEdit>>({})
 const isBusyModalVisible = ref(false)
 const busyTitle = ref('')
 const busyText = ref('')
+const busyLogStartIndex = ref<number | null>(null)
 const isConfirmModalVisible = ref(false)
 const confirmTitle = ref('')
 const confirmText = ref('')
@@ -84,6 +85,12 @@ let resizeStartWidth = 0
 let isResizingColumns = false
 
 const hasHistory = computed(() => commits.value.length > 0)
+const busyLogs = computed(() => {
+  if (busyLogStartIndex.value === null) {
+    return []
+  }
+  return logs.value.slice(busyLogStartIndex.value)
+})
 const manualEditCount = computed(
   () => Object.values(editMap).filter((edit) => hasPendingChanges(edit)).length,
 )
@@ -155,6 +162,7 @@ function showBusyModal(title: string, text: string) {
 
 function hideBusyModal() {
   isBusyModalVisible.value = false
+  busyLogStartIndex.value = null
 }
 
 function openConfirmModal(
@@ -391,6 +399,7 @@ async function executeRewrite(edits: CommitEdit[]) {
   try {
     isRewriting.value = true
     resetFeedback()
+    busyLogStartIndex.value = logs.value.length
     showBusyModal('正在改写 Git 提交', `正在处理 ${edits.length} 条提交，请不要关闭应用...`)
     addLog(`开始改写 ${edits.length} 条提交...`)
     const result = await rewriteGitHistory({ repoPath: repoPath.value, edits })
@@ -604,7 +613,7 @@ onUnmounted(() => {
       </div>
     </main>
 
-    <BusyModal :visible="isBusyModalVisible" :title="busyTitle" :text="busyText" />
+    <BusyModal :visible="isBusyModalVisible" :title="busyTitle" :text="busyText" :logs="busyLogs" />
     <ConfirmModal
       :visible="isConfirmModalVisible"
       :title="confirmTitle"

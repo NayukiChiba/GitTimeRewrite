@@ -1,9 +1,24 @@
 <script setup lang="ts">
-defineProps<{
+import { nextTick, ref, watch } from 'vue'
+
+const props = defineProps<{
   visible: boolean
   title: string
   text: string
+  logs?: string[]
 }>()
+
+const logRef = ref<HTMLElement | null>(null)
+
+watch(
+  () => props.logs?.length ?? 0,
+  async () => {
+    await nextTick()
+    if (logRef.value) {
+      logRef.value.scrollTop = logRef.value.scrollHeight
+    }
+  },
+)
 </script>
 
 <template>
@@ -11,6 +26,11 @@ defineProps<{
     <div class="modal-card">
       <div class="modal-title">{{ title }}</div>
       <div class="modal-text">{{ text }}</div>
+      <div v-if="logs && logs.length > 0" ref="logRef" class="modal-log-box">
+        <div v-for="(item, idx) in logs" :key="`${idx}-${item}`" class="modal-log-item">
+          {{ item }}
+        </div>
+      </div>
       <div class="modal-loading"></div>
     </div>
   </div>
@@ -28,7 +48,7 @@ defineProps<{
 }
 
 .modal-card {
-  width: min(420px, calc(100vw - 40px));
+  width: min(520px, calc(100vw - 40px));
   background: #ffffff;
   border-radius: 14px;
   border: 1px solid #e2e8f0;
@@ -46,6 +66,28 @@ defineProps<{
   margin-top: 8px;
   font-size: 13px;
   color: #475569;
+}
+
+.modal-log-box {
+  margin-top: 12px;
+  max-height: 140px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #f8fafc;
+}
+
+.modal-log-item {
+  font-size: 12px;
+  color: #334155;
+  line-height: 1.5;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  word-break: break-word;
+}
+
+.modal-log-item + .modal-log-item {
+  margin-top: 4px;
 }
 
 .modal-loading {
