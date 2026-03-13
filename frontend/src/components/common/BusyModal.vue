@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { nextTick, ref, watch } from 'vue'
 
 const props = defineProps<{
@@ -9,6 +10,26 @@ const props = defineProps<{
 }>()
 
 const logRef = ref<HTMLElement | null>(null)
+
+async function handleMaskMouseDown(event: MouseEvent) {
+  if (event.button !== 0) {
+    return
+  }
+
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.modal-card')) {
+    return
+  }
+
+  await getCurrentWindow().startDragging()
+}
+
+async function handleTitleMouseDown(event: MouseEvent) {
+  if (event.button !== 0) {
+    return
+  }
+  await getCurrentWindow().startDragging()
+}
 
 watch(
   () => props.logs?.length ?? 0,
@@ -22,9 +43,9 @@ watch(
 </script>
 
 <template>
-  <div v-if="visible" class="modal-mask">
+  <div v-if="visible" class="modal-mask" @mousedown="handleMaskMouseDown">
     <div class="modal-card">
-      <div class="modal-title">{{ title }}</div>
+      <div class="modal-title" @mousedown.stop="handleTitleMouseDown">{{ title }}</div>
       <div class="modal-text">{{ text }}</div>
       <div v-if="logs && logs.length > 0" ref="logRef" class="modal-log-box">
         <div v-for="(item, idx) in logs" :key="`${idx}-${item}`" class="modal-log-item">

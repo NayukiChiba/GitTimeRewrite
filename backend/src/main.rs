@@ -14,8 +14,13 @@ fn get_git_history(app: tauri::AppHandle, repo_path: String) -> Result<Vec<git_h
 }
 
 #[tauri::command]
-fn rewrite_git_history(app: tauri::AppHandle, request: RewriteRequest) -> Result<git_history::RewriteResult, String> {
-    rewrite_git_history_impl(&app, request)
+async fn rewrite_git_history(
+    app: tauri::AppHandle,
+    request: RewriteRequest,
+) -> Result<git_history::RewriteResult, String> {
+    tauri::async_runtime::spawn_blocking(move || rewrite_git_history_impl(&app, request))
+        .await
+        .map_err(|error| format!("改写任务执行失败: {error}"))?
 }
 
 #[tauri::command]

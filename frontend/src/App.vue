@@ -86,6 +86,9 @@ let unlistenLog: (() => void) | null = null
 let resizeStartX = 0
 let resizeStartWidth = 0
 let isResizingColumns = false
+let logFlushTimer: number | null = null
+const pendingLogQueue: string[] = []
+const MAX_LOG_COUNT = 3000
 
 const hasHistory = computed(() => commits.value.length > 0)
 const busyLogs = computed(() => {
@@ -213,7 +216,21 @@ function laneColor(index: number): string {
 
 function addLog(message: string) {
   const now = new Date().toLocaleTimeString('zh-CN', { hour12: false })
-  logs.value.push(`[${now}] ${message}`)
+  pendingLogQueue.push(`[${now}] ${message}`)
+
+  if (logFlushTimer !== null) {
+    return
+  }
+
+  logFlushTimer = window.setTimeout(() => {
+    logs.value.push(...pendingLogQueue.splice(0))
+
+    if (logs.value.length > MAX_LOG_COUNT) {
+      logs.value.splice(0, logs.value.length - MAX_LOG_COUNT)
+    }
+
+    logFlushTimer = null
+  }, 50)
 }
 
 function showBusyModal(title: string, text: string) {
@@ -616,6 +633,15 @@ onMounted(async () => {
 onUnmounted(() => {
   unlistenLog?.()
   stopResizing()
+
+  if (logFlushTimer !== null) {
+    window.clearTimeout(logFlushTimer)
+    logFlushTimer = null
+  }
+
+  if (pendingLogQueue.length > 0) {
+    logs.value.push(...pendingLogQueue.splice(0))
+  }
 })
 </script>
 
