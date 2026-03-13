@@ -14,6 +14,16 @@ type TimelineRow = {
   isMerge: boolean
 }
 
+const EDITABLE_FIELDS: Array<keyof CommitEdit> = [
+  'message',
+  'authorName',
+  'authorEmail',
+  'authorDate',
+  'committerDate',
+  'committerName',
+  'committerEmail',
+]
+
 const repoPath = ref('')
 const commits = ref<GitCommit[]>([])
 const selectedCommitId = ref('')
@@ -54,17 +64,7 @@ let resizeStartWidth = 0
 
 const hasHistory = computed(() => commits.value.length > 0)
 const manualEditCount = computed(
-  () =>
-    Object.values(editMap).filter(
-      (edit) =>
-        !!edit.message ||
-        !!edit.authorName ||
-        !!edit.authorEmail ||
-        !!edit.authorDate ||
-        !!edit.committerDate ||
-        !!edit.committerName ||
-        !!edit.committerEmail,
-    ).length,
+  () => Object.values(editMap).filter((edit) => hasPendingChanges(edit)).length,
 )
 
 const currentCommit = computed(() =>
@@ -163,6 +163,21 @@ function getOrCreateEdit(commitId: string): CommitEdit {
   return editMap[commitId]
 }
 
+function hasPendingChanges(edit?: CommitEdit): boolean {
+  if (!edit) {
+    return false
+  }
+
+  return EDITABLE_FIELDS.some((field) => {
+    const value = edit[field]
+    return typeof value === 'string' && value.trim().length > 0
+  })
+}
+
+function hasPendingEdit(commitId: string): boolean {
+  return hasPendingChanges(editMap[commitId])
+}
+
 function selectCommit(commitId: string) {
   selectedCommitId.value = commitId
   getOrCreateEdit(commitId)
@@ -221,16 +236,7 @@ async function refreshHistory() {
 }
 
 async function applyManualEdits() {
-  const edits = Object.values(editMap).filter(
-    (edit) =>
-      !!edit.message ||
-      !!edit.authorName ||
-      !!edit.authorEmail ||
-      !!edit.authorDate ||
-      !!edit.committerDate ||
-      !!edit.committerName ||
-      !!edit.committerEmail,
-  )
+  const edits = Object.values(editMap).filter((edit) => hasPendingChanges(edit))
 
   if (edits.length === 0) {
     errorText.value = '没有可提交的手动修改'
@@ -300,6 +306,7 @@ async function executeRewrite(edits: CommitEdit[]) {
     })
     statusText.value = `改写完成，共处理 ${result.rewrittenCount} 条提交`
     addLog(`改写完成，共处理 ${result.rewrittenCount} 条提交`)
+    resetEdits()
     await refreshHistory()
   } catch (error) {
     errorText.value = String(error)
@@ -479,7 +486,10 @@ function resetEdits() {
                 v-for="row in timelineRows"
                 :key="row.commit.id"
                 class="timeline-item"
-                :class="{ active: row.commit.id === selectedCommitId }"
+                :class="{
+                  active: row.commit.id === selectedCommitId,
+                  pending: hasPendingEdit(row.commit.id),
+                }"
                 @click="selectCommit(row.commit.id)"
               >
                 <div class="graph" :style="{ '--lane-count': `${row.laneCount}` }">
@@ -500,6 +510,7 @@ function resetEdits() {
                 <div class="timeline-content">
                   <div class="timeline-top">
                     <span class="message">{{ row.commit.message }}</span>
+                    <span v-if="hasPendingEdit(row.commit.id)" class="pending-badge">已修改</span>
                   </div>
                   <div class="timeline-bottom">
                     <span class="commit-id">{{ row.commit.id.slice(0, 8) }}</span>
@@ -553,7 +564,12 @@ function resetEdits() {
             <div v-else-if="rightTab === 'manual'" class="form-body">
               <div class="panel-meta">当前提交: {{ currentCommit!.id.slice(0, 8) }}</div>
               <label class="field full">
-                <span>提交说明 (Message)</span>
+                <span
+                  >提交说明 (Message)
+                  <em v-if="getOrCreateEdit(currentCommit!.id).message" class="field-mark"
+                    >已改</em
+                  ></span
+                >
                 <textarea
                   v-model="getOrCreateEdit(currentCommit!.id).message"
                   :placeholder="currentCommit!.message"
@@ -562,28 +578,48 @@ function resetEdits() {
               </label>
               <div class="form-grid">
                 <label class="field">
-                  <span>作者名称</span>
+                  <span
+                    >作者名称
+                    <em v-if="getOrCreateEdit(currentCommit!.id).authorName" class="field-mark"
+                      >已改</em
+                    ></span
+                  >
                   <input
                     v-model="getOrCreateEdit(currentCommit!.id).authorName"
                     :placeholder="currentCommit!.authorName"
                   />
                 </label>
                 <label class="field">
-                  <span>作者邮箱</span>
+                  <span
+                    >作者邮箱
+                    <em v-if="getOrCreateEdit(currentCommit!.id).authorEmail" class="field-mark"
+                      >已改</em
+                    ></span
+                  >
                   <input
                     v-model="getOrCreateEdit(currentCommit!.id).authorEmail"
                     :placeholder="currentCommit!.authorEmail"
                   />
                 </label>
                 <label class="field">
-                  <span>作者时间</span>
+                  <span
+                    >作者时间
+                    <em v-if="getOrCreateEdit(currentCommit!.id).authorDate" class="field-mark"
+                      >已改</em
+                    ></span
+                  >
                   <input
                     v-model="getOrCreateEdit(currentCommit!.id).authorDate"
                     :placeholder="formatDate(currentCommit!.authorDate)"
                   />
                 </label>
                 <label class="field">
-                  <span>提交时间</span>
+                  <span
+                    >提交时间
+                    <em v-if="getOrCreateEdit(currentCommit!.id).committerDate" class="field-mark"
+                      >已改</em
+                    ></span
+                  >
                   <input
                     v-model="getOrCreateEdit(currentCommit!.id).committerDate"
                     :placeholder="formatDate(currentCommit!.committerDate)"
@@ -964,6 +1000,8 @@ function resetEdits() {
 .timeline-top {
   display: flex;
   justify-content: flex-start;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 6px;
 }
 
@@ -978,6 +1016,20 @@ function resetEdits() {
 
 .timeline-item.active .message {
   color: #1d4ed8;
+}
+
+.timeline-item.pending {
+  border-color: #93c5fd;
+}
+
+.pending-badge {
+  margin-left: auto;
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .timeline-bottom {
@@ -1046,6 +1098,17 @@ function resetEdits() {
   font-size: 13px;
   font-weight: 600;
   color: #475569;
+}
+
+.field-mark {
+  display: inline-block;
+  margin-left: 6px;
+  font-style: normal;
+  font-size: 11px;
+  color: #1d4ed8;
+  background: #dbeafe;
+  border-radius: 999px;
+  padding: 1px 6px;
 }
 
 .opt {
@@ -1212,7 +1275,7 @@ textarea {
   padding: 16px;
   margin: 16px 20px 20px;
   flex: 1;
-  overflow: hidden;
+  overflow-y: auto;
   min-height: 100px;
   font-family: 'JetBrains Mono', Consolas, monospace;
   font-size: 12px;
