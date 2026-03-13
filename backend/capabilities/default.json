@@ -2,5 +2,11 @@
   "identifier": "default",
   "description": "默认桌面权限",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-start-dragging",
+    "dialog:default"
+  ]
 }

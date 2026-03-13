@@ -34,7 +34,20 @@ const batchForm = reactive({
 const editMap = reactive<Record<string, CommitEdit>>({})
 const logs = ref<string[]>([])
 const logContentRef = ref<HTMLElement | null>(null)
+const workspaceRef = ref<HTMLElement | null>(null)
+const rightPaneRef = ref<HTMLElement | null>(null)
+const leftPaneWidth = ref(460)
+const editPanelHeight = ref(300)
+const batchPanelHeight = ref(260)
 let unlistenLog: (() => void) | null = null
+
+type ResizeMode = 'none' | 'columns' | 'edit' | 'batch'
+
+let resizeMode: ResizeMode = 'none'
+let resizeStartX = 0
+let resizeStartY = 0
+let resizeStartWidth = 0
+let resizeStartHeight = 0
 
 const hasHistory = computed(() => commits.value.length > 0)
 const manualEditCount = computed(
@@ -257,12 +270,77 @@ async function minimizeWindow() {
   await getCurrentWindow().minimize()
 }
 
-async function toggleMaximizeWindow() {
-  await getCurrentWindow().toggleMaximize()
-}
-
 async function closeWindow() {
   await getCurrentWindow().close()
+}
+
+async function startWindowDrag() {
+  await getCurrentWindow().startDragging()
+}
+
+function startColumnsResize(event: MouseEvent) {
+  if (!workspaceRef.value) {
+    return
+  }
+  resizeMode = 'columns'
+  resizeStartX = event.clientX
+  resizeStartWidth = leftPaneWidth.value
+  window.addEventListener('mousemove', handleResizing)
+  window.addEventListener('mouseup', stopResizing)
+}
+
+function startEditResize(event: MouseEvent) {
+  resizeMode = 'edit'
+  resizeStartY = event.clientY
+  resizeStartHeight = editPanelHeight.value
+  window.addEventListener('mousemove', handleResizing)
+  window.addEventListener('mouseup', stopResizing)
+}
+
+function startBatchResize(event: MouseEvent) {
+  resizeMode = 'batch'
+  resizeStartY = event.clientY
+  resizeStartHeight = batchPanelHeight.value
+  window.addEventListener('mousemove', handleResizing)
+  window.addEventListener('mouseup', stopResizing)
+}
+
+function handleResizing(event: MouseEvent) {
+  if (resizeMode === 'none') {
+    return
+  }
+
+  if (resizeMode === 'columns' && workspaceRef.value) {
+    const workspaceWidth = workspaceRef.value.clientWidth
+    const nextWidth = resizeStartWidth + (event.clientX - resizeStartX)
+    leftPaneWidth.value = Math.max(320, Math.min(nextWidth, workspaceWidth - 440))
+    return
+  }
+
+  if (!rightPaneRef.value) {
+    return
+  }
+
+  const paneHeight = rightPaneRef.value.clientHeight
+
+  if (resizeMode === 'edit') {
+    const nextHeight = resizeStartHeight + (event.clientY - resizeStartY)
+    const maxHeight = paneHeight - batchPanelHeight.value - 220
+    editPanelHeight.value = Math.max(220, Math.min(nextHeight, maxHeight))
+    return
+  }
+
+  if (resizeMode === 'batch') {
+    const nextHeight = resizeStartHeight + (event.clientY - resizeStartY)
+    const maxHeight = paneHeight - editPanelHeight.value - 220
+    batchPanelHeight.value = Math.max(200, Math.min(nextHeight, maxHeight))
+  }
+}
+
+function stopResizing() {
+  resizeMode = 'none'
+  window.removeEventListener('mousemove', handleResizing)
+  window.removeEventListener('mouseup', stopResizing)
 }
 
 watch(
@@ -283,6 +361,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   unlistenLog?.()
+  stopResizing()
 })
 
 function clearLogs() {
@@ -296,24 +375,42 @@ function resetEdits() {
 }
 </script>
 
-
-
 <template>
   <div class="app-shell">
-    <header class="window-bar" data-tauri-drag-region>
-      <div class="window-title" data-tauri-drag-region>
-        <svg class="app-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path></svg>
-        <span>Git Time Rewrite</span>
+    <header class="window-bar">
+      <div class="window-dragger" @mousedown.left.prevent="startWindowDrag">
+        <div class="window-title">
+          <svg
+            class="app-icon"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            stroke-width="2.5"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"
+            ></path>
+          </svg>
+          <span>Git Time Rewrite</span>
+        </div>
       </div>
       <div class="window-actions">
         <button class="win-btn" @click="minimizeWindow">
-          <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 6h10" stroke="#64748b" stroke-width="1.5" stroke-linecap="round"/></svg>
-        </button>
-        <button class="win-btn" @click="toggleMaximizeWindow">
-          <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" stroke="#64748b" stroke-width="1.5" fill="none" rx="1"/></svg>
+          <svg width="12" height="12" viewBox="0 0 12 12">
+            <path d="M1 6h10" stroke="#64748b" stroke-width="1.5" stroke-linecap="round" />
+          </svg>
         </button>
         <button class="win-btn win-close" @click="closeWindow">
-          <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 2l8 8M10 2L2 10" stroke="#64748b" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <svg width="12" height="12" viewBox="0 0 12 12">
+            <path
+              d="M2 2l8 8M10 2L2 10"
+              stroke="#64748b"
+              stroke-width="1.5"
+              stroke-linecap="round"
+            />
+          </svg>
         </button>
       </div>
     </header>
@@ -321,9 +418,26 @@ function resetEdits() {
     <main class="main-layout">
       <!-- Top Row: Select Folder -->
       <div class="top-bar">
-        <button class="btn btn-primary btn-large shadow-brand" :disabled="isLoading || isRewriting" @click="pickRepoFolder">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="margin-right: 8px">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+        <button
+          class="btn btn-primary btn-large shadow-brand"
+          :disabled="isLoading || isRewriting"
+          @click="pickRepoFolder"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="20"
+            height="20"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            stroke-width="2"
+            style="margin-right: 8px"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+            />
           </svg>
           选择项目文件夹
         </button>
@@ -338,7 +452,11 @@ function resetEdits() {
 
       <p v-if="errorText" class="error-banner">{{ errorText }}</p>
 
-      <div class="workspace-grid">
+      <div
+        ref="workspaceRef"
+        class="workspace-grid"
+        :style="{ '--left-pane-width': `${leftPaneWidth}px` }"
+      >
         <!-- Left: Timeline Grid (Native-like) -->
         <div class="card col-left">
           <div class="card-head">
@@ -365,7 +483,10 @@ function resetEdits() {
                   />
                   <span
                     class="graph-node"
-                    :style="{ left: `${row.lane * 16 + 8}px`, backgroundColor: laneColor(row.lane) }"
+                    :style="{
+                      left: `${row.lane * 16 + 8}px`,
+                      backgroundColor: laneColor(row.lane),
+                    }"
                   />
                 </div>
                 <div class="timeline-content">
@@ -373,12 +494,12 @@ function resetEdits() {
                     <span class="message">{{ row.commit.message }}</span>
                   </div>
                   <div class="timeline-bottom">
-                     <span class="commit-id">{{ row.commit.id.slice(0, 8) }}</span>
-                     <span class="meta-dot">·</span>
-                     <span class="meta">{{ row.commit.authorName }}</span>
-                     <span class="meta-dot">·</span>
-                     <span class="meta date">{{ formatDate(row.commit.authorDate) }}</span>
-                     <span v-if="row.isMerge" class="badge ml-auto">Merge</span>
+                    <span class="commit-id">{{ row.commit.id.slice(0, 8) }}</span>
+                    <span class="meta-dot">·</span>
+                    <span class="meta">{{ row.commit.authorName }}</span>
+                    <span class="meta-dot">·</span>
+                    <span class="meta date">{{ formatDate(row.commit.authorDate) }}</span>
+                    <span v-if="row.isMerge" class="badge ml-auto">Merge</span>
                   </div>
                 </div>
               </button>
@@ -386,15 +507,21 @@ function resetEdits() {
           </div>
         </div>
 
+        <div class="resize-divider col-divider" @mousedown.prevent="startColumnsResize"></div>
+
         <!-- Right: Action Panels -->
-        <div class="col-right scroll-y">
+        <div ref="rightPaneRef" class="col-right">
           <!-- Edit Area -->
-          <div class="card auto-height">
+          <div class="card right-panel-card" :style="{ height: `${editPanelHeight}px` }">
             <div class="card-head">
               <h2>编辑选中提交</h2>
-              <span v-if="currentCommit" class="chip blue-chip">当前: {{ currentCommit.id.slice(0,8) }}</span>
+              <span v-if="currentCommit" class="chip blue-chip"
+                >当前: {{ currentCommit.id.slice(0, 8) }}</span
+              >
             </div>
-            <div v-if="!currentCommit" class="placeholder small">请在左侧时间线选择一条提交记录进行编辑</div>
+            <div v-if="!currentCommit" class="placeholder small">
+              请在左侧时间线选择一条提交记录进行编辑
+            </div>
             <div v-else class="form-body">
               <label class="field full">
                 <span>提交说明 (Message)</span>
@@ -407,32 +534,52 @@ function resetEdits() {
               <div class="form-grid">
                 <label class="field">
                   <span>作者名称</span>
-                  <input v-model="getOrCreateEdit(currentCommit.id).authorName" :placeholder="currentCommit.authorName" />
+                  <input
+                    v-model="getOrCreateEdit(currentCommit.id).authorName"
+                    :placeholder="currentCommit.authorName"
+                  />
                 </label>
                 <label class="field">
                   <span>作者邮箱</span>
-                  <input v-model="getOrCreateEdit(currentCommit.id).authorEmail" :placeholder="currentCommit.authorEmail" />
+                  <input
+                    v-model="getOrCreateEdit(currentCommit.id).authorEmail"
+                    :placeholder="currentCommit.authorEmail"
+                  />
                 </label>
                 <label class="field">
                   <span>作者时间</span>
-                  <input v-model="getOrCreateEdit(currentCommit.id).authorDate" :placeholder="formatDate(currentCommit.authorDate)" />
+                  <input
+                    v-model="getOrCreateEdit(currentCommit.id).authorDate"
+                    :placeholder="formatDate(currentCommit.authorDate)"
+                  />
                 </label>
                 <label class="field">
                   <span>提交时间</span>
-                  <input v-model="getOrCreateEdit(currentCommit.id).committerDate" :placeholder="formatDate(currentCommit.committerDate)" />
+                  <input
+                    v-model="getOrCreateEdit(currentCommit.id).committerDate"
+                    :placeholder="formatDate(currentCommit.committerDate)"
+                  />
                 </label>
               </div>
               <div class="actions-row mt-4">
-                <button class="btn btn-primary" :disabled="isLoading || isRewriting || manualEditCount === 0" @click="applyManualEdits">
+                <button
+                  class="btn btn-primary"
+                  :disabled="isLoading || isRewriting || manualEditCount === 0"
+                  @click="applyManualEdits"
+                >
                   保存并应用编辑 ({{ manualEditCount }} 待提交)
                 </button>
-                <button class="btn btn-text" :disabled="manualEditCount === 0" @click="resetEdits">撤销修改</button>
+                <button class="btn btn-text" :disabled="manualEditCount === 0" @click="resetEdits">
+                  撤销修改
+                </button>
               </div>
             </div>
           </div>
 
+          <div class="resize-divider row-divider" @mousedown.prevent="startEditResize"></div>
+
           <!-- Batch Area -->
-          <div class="card auto-height">
+          <div class="card right-panel-card" :style="{ height: `${batchPanelHeight}px` }">
             <div class="card-head">
               <h2>批量平滑改写</h2>
               <span class="chip">将其余记录均匀散布到指定窗口内</span>
@@ -465,9 +612,25 @@ function resetEdits() {
                 </label>
               </div>
               <div class="actions-row mt-4">
-                <button class="btn btn-primary bg-indigo" :disabled="isLoading || isRewriting || !hasHistory" @click="applyBatchTimelineEdits">
-                  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" class="mr-1">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                <button
+                  class="btn btn-primary bg-indigo"
+                  :disabled="isLoading || isRewriting || !hasHistory"
+                  @click="applyBatchTimelineEdits"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    class="mr-1"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M13 10V3L4 14h7v7l9-11h-7z"
+                    />
                   </svg>
                   执行时间线批量重写
                 </button>
@@ -475,8 +638,10 @@ function resetEdits() {
             </div>
           </div>
 
+          <div class="resize-divider row-divider" @mousedown.prevent="startBatchResize"></div>
+
           <!-- Logs Area -->
-          <div class="card flex-grow min-h-[160px]">
+          <div class="card flex-grow min-h-160">
             <div class="card-head">
               <h2>运行日志</h2>
               <button class="btn btn-text btn-xs" @click="clearLogs">清空</button>
@@ -516,6 +681,13 @@ function resetEdits() {
   user-select: none;
   border-bottom: 1px solid #e2e8f0;
   flex-shrink: 0;
+}
+
+.window-dragger {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
 }
 
 .window-title {
@@ -595,11 +767,15 @@ function resetEdits() {
   height: 10px;
   border-radius: 50%;
   background: #cbd5e1;
-  box-shadow: inset 0 0 0 2px #fff, 0 0 0 2px #cbd5e1;
+  box-shadow:
+    inset 0 0 0 2px #fff,
+    0 0 0 2px #cbd5e1;
 }
 .status-indicator.active {
   background: #10b981;
-  box-shadow: inset 0 0 0 2px #fff, 0 0 0 2px #10b981;
+  box-shadow:
+    inset 0 0 0 2px #fff,
+    0 0 0 2px #10b981;
 }
 
 .status-texts {
@@ -623,8 +799,8 @@ function resetEdits() {
 .workspace-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(380px, 45%) minmax(420px, 1fr);
-  gap: 24px;
+  grid-template-columns: var(--left-pane-width, 460px) 8px minmax(420px, 1fr);
+  gap: 0;
   padding: 0 32px 24px;
   overflow: hidden;
 }
@@ -641,28 +817,21 @@ function resetEdits() {
 
 .col-left {
   min-height: 0;
+  margin-right: 12px;
 }
 
 .col-right {
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding-right: 12px; /* For scrollbar margins */
-  padding-bottom: 24px;
+  margin-left: 12px;
+  padding-bottom: 8px;
 }
 
-.col-right::-webkit-scrollbar {
-  width: 6px;
-}
-.col-right::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 8px;
-}
-
-.auto-height {
+.right-panel-card {
   flex: 0 0 auto;
+  min-height: 180px;
 }
 
 .flex-grow {
@@ -707,10 +876,12 @@ function resetEdits() {
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .form-body {
   padding: 20px 24px;
+  overflow-y: auto;
 }
 
 .scroll-y {
@@ -769,7 +940,7 @@ function resetEdits() {
   height: 12px;
   border-radius: 50%;
   border: 2px solid #ffffff;
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.06);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
   z-index: 2;
 }
 
@@ -871,7 +1042,8 @@ function resetEdits() {
   color: #94a3b8;
 }
 
-input, textarea {
+input,
+textarea {
   padding: 12px 14px;
   border-radius: 10px;
   border: 1px solid #cbd5e1;
@@ -882,11 +1054,13 @@ input, textarea {
   transition: all 0.2s ease;
 }
 
-input::placeholder, textarea::placeholder {
+input::placeholder,
+textarea::placeholder {
   color: #94a3b8;
 }
 
-input:focus, textarea:focus {
+input:focus,
+textarea:focus {
   outline: none;
   background: #ffffff;
   border-color: #2563eb;
@@ -904,9 +1078,15 @@ textarea {
   align-items: center;
   gap: 12px;
 }
-.mt-4 { margin-top: 16px; }
-.mt-2 { margin-top: 8px; }
-.mr-1 { margin-right: 4px; }
+.mt-4 {
+  margin-top: 16px;
+}
+.mt-2 {
+  margin-top: 8px;
+}
+.mr-1 {
+  margin-right: 4px;
+}
 
 .btn {
   display: inline-flex;
@@ -1027,6 +1207,48 @@ textarea {
   border: 1px solid #fecaca;
   font-weight: 500;
   font-size: 13px;
+}
+
+.resize-divider {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.col-divider {
+  width: 8px;
+  cursor: col-resize;
+}
+
+.col-divider::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: #dbe4ef;
+  border-radius: 2px;
+}
+
+.row-divider {
+  height: 10px;
+  cursor: row-resize;
+}
+
+.row-divider::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 4px;
+  height: 2px;
+  background: #dbe4ef;
+  border-radius: 2px;
+}
+
+.col-divider:hover::before,
+.row-divider:hover::before {
+  background: #93c5fd;
 }
 
 /* Scrollbars */
