@@ -30,8 +30,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --prefix frontend
 
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
       - name: Build exe with Tauri
-        run: npm --prefix frontend exec tauri build --config ../backend/tauri.conf.json --no-bundle
+        working-directory: backend
+        run: |
+          $env:Path = (Join-Path (Get-Location) "..\frontend\node_modules\.bin") + ";$env:Path"
+          tauri build --no-bundle --config '{"build":{"beforeBuildCommand":""}}'
 
       - name: Upload exe artifact
         uses: actions/upload-artifact@v4
