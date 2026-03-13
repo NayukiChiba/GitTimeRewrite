@@ -35,19 +35,22 @@ const editMap = reactive<Record<string, CommitEdit>>({})
 const logs = ref<string[]>([])
 const logContentRef = ref<HTMLElement | null>(null)
 const workspaceRef = ref<HTMLElement | null>(null)
-const rightPaneRef = ref<HTMLElement | null>(null)
 const leftPaneWidth = ref(460)
-const editPanelHeight = ref(300)
-const batchPanelHeight = ref(260)
+const rightTab = ref<'manual' | 'batch' | 'logs'>('manual')
+const isBusyModalVisible = ref(false)
+const busyTitle = ref('')
+const busyText = ref('')
+const isConfirmModalVisible = ref(false)
+const confirmTitle = ref('')
+const confirmText = ref('')
+const pendingEdits = ref<CommitEdit[]>([])
 let unlistenLog: (() => void) | null = null
 
-type ResizeMode = 'none' | 'columns' | 'edit' | 'batch'
+type ResizeMode = 'none' | 'columns'
 
 let resizeMode: ResizeMode = 'none'
 let resizeStartX = 0
-let resizeStartY = 0
 let resizeStartWidth = 0
-let resizeStartHeight = 0
 
 const hasHistory = computed(() => commits.value.length > 0)
 const manualEditCount = computed(
@@ -123,6 +126,28 @@ function addLog(message: string) {
   logs.value.push(`[${now}] ${message}`)
 }
 
+function showBusyModal(title: string, text: string) {
+  busyTitle.value = title
+  busyText.value = text
+  isBusyModalVisible.value = true
+}
+
+function hideBusyModal() {
+  isBusyModalVisible.value = false
+}
+
+function openConfirmModal(edits: CommitEdit[], title: string, text: string) {
+  pendingEdits.value = edits
+  confirmTitle.value = title
+  confirmText.value = text
+  isConfirmModalVisible.value = true
+}
+
+function closeConfirmModal() {
+  isConfirmModalVisible.value = false
+  pendingEdits.value = []
+}
+
 function resetFeedback() {
   errorText.value = ''
 }
@@ -174,6 +199,7 @@ async function refreshHistory() {
   try {
     isLoading.value = true
     resetFeedback()
+    showBusyModal('正在加载 Git 历史', '正在读取提交记录，请稍候...')
     addLog(`开始加载仓库历史: ${repoPath.value}`)
     commits.value = await getGitHistory(repoPath.value)
     statusText.value = `已加载 ${commits.value.length} 条提交历史`
@@ -190,6 +216,7 @@ async function refreshHistory() {
     addLog(`加载失败: ${String(error)}`)
   } finally {
     isLoading.value = false
+    hideBusyModal()
   }
 }
 
@@ -210,7 +237,7 @@ async function applyManualEdits() {
     return
   }
 
-  await executeRewrite(edits)
+  openConfirmModal(edits, '确认提交信息更改', `即将改写 ${edits.length} 条提交，是否继续？`)
 }
 
 async function applyBatchTimelineEdits() {
@@ -235,10 +262,25 @@ async function applyBatchTimelineEdits() {
       committerEmail: batchForm.authorEmail || undefined,
     }))
 
-    await executeRewrite(batchEdits)
+    openConfirmModal(
+      batchEdits,
+      '确认批量更改',
+      `即将批量改写 ${batchEdits.length} 条提交，是否继续？`,
+    )
   } catch (error) {
     errorText.value = String(error)
   }
+}
+
+async function confirmRewrite() {
+  if (pendingEdits.value.length === 0) {
+    closeConfirmModal()
+    return
+  }
+
+  const edits = [...pendingEdits.value]
+  closeConfirmModal()
+  await executeRewrite(edits)
 }
 
 async function executeRewrite(edits: CommitEdit[]) {
@@ -250,6 +292,7 @@ async function executeRewrite(edits: CommitEdit[]) {
   try {
     isRewriting.value = true
     resetFeedback()
+    showBusyModal('正在改写 Git 提交', `正在处理 ${edits.length} 条提交，请不要关闭应用...`)
     addLog(`开始改写 ${edits.length} 条提交...`)
     const result = await rewriteGitHistory({
       repoPath: repoPath.value,
@@ -263,6 +306,7 @@ async function executeRewrite(edits: CommitEdit[]) {
     addLog(`改写失败: ${String(error)}`)
   } finally {
     isRewriting.value = false
+    hideBusyModal()
   }
 }
 
@@ -289,22 +333,6 @@ function startColumnsResize(event: MouseEvent) {
   window.addEventListener('mouseup', stopResizing)
 }
 
-function startEditResize(event: MouseEvent) {
-  resizeMode = 'edit'
-  resizeStartY = event.clientY
-  resizeStartHeight = editPanelHeight.value
-  window.addEventListener('mousemove', handleResizing)
-  window.addEventListener('mouseup', stopResizing)
-}
-
-function startBatchResize(event: MouseEvent) {
-  resizeMode = 'batch'
-  resizeStartY = event.clientY
-  resizeStartHeight = batchPanelHeight.value
-  window.addEventListener('mousemove', handleResizing)
-  window.addEventListener('mouseup', stopResizing)
-}
-
 function handleResizing(event: MouseEvent) {
   if (resizeMode === 'none') {
     return
@@ -314,26 +342,6 @@ function handleResizing(event: MouseEvent) {
     const workspaceWidth = workspaceRef.value.clientWidth
     const nextWidth = resizeStartWidth + (event.clientX - resizeStartX)
     leftPaneWidth.value = Math.max(320, Math.min(nextWidth, workspaceWidth - 440))
-    return
-  }
-
-  if (!rightPaneRef.value) {
-    return
-  }
-
-  const paneHeight = rightPaneRef.value.clientHeight
-
-  if (resizeMode === 'edit') {
-    const nextHeight = resizeStartHeight + (event.clientY - resizeStartY)
-    const maxHeight = paneHeight - batchPanelHeight.value - 220
-    editPanelHeight.value = Math.max(220, Math.min(nextHeight, maxHeight))
-    return
-  }
-
-  if (resizeMode === 'batch') {
-    const nextHeight = resizeStartHeight + (event.clientY - resizeStartY)
-    const maxHeight = paneHeight - editPanelHeight.value - 220
-    batchPanelHeight.value = Math.max(200, Math.min(nextHeight, maxHeight))
   }
 }
 
@@ -509,25 +517,46 @@ function resetEdits() {
 
         <div class="resize-divider col-divider" @mousedown.prevent="startColumnsResize"></div>
 
-        <!-- Right: Action Panels -->
-        <div ref="rightPaneRef" class="col-right">
-          <!-- Edit Area -->
-          <div class="card right-panel-card" :style="{ height: `${editPanelHeight}px` }">
+        <!-- Right: Switching Panel -->
+        <div class="col-right">
+          <div class="card right-panel-card">
             <div class="card-head">
-              <h2>编辑选中提交</h2>
-              <span v-if="currentCommit" class="chip blue-chip"
-                >当前: {{ currentCommit.id.slice(0, 8) }}</span
-              >
+              <h2>操作面板</h2>
+              <div class="tab-switch">
+                <button
+                  class="tab-btn"
+                  :class="{ active: rightTab === 'manual' }"
+                  @click="rightTab = 'manual'"
+                >
+                  信息更改
+                </button>
+                <button
+                  class="tab-btn"
+                  :class="{ active: rightTab === 'batch' }"
+                  @click="rightTab = 'batch'"
+                >
+                  批量更改
+                </button>
+                <button
+                  class="tab-btn"
+                  :class="{ active: rightTab === 'logs' }"
+                  @click="rightTab = 'logs'"
+                >
+                  日志
+                </button>
+              </div>
             </div>
-            <div v-if="!currentCommit" class="placeholder small">
+
+            <div v-if="rightTab === 'manual' && !currentCommit" class="placeholder small">
               请在左侧时间线选择一条提交记录进行编辑
             </div>
-            <div v-else class="form-body">
+            <div v-else-if="rightTab === 'manual'" class="form-body">
+              <div class="panel-meta">当前提交: {{ currentCommit!.id.slice(0, 8) }}</div>
               <label class="field full">
                 <span>提交说明 (Message)</span>
                 <textarea
-                  v-model="getOrCreateEdit(currentCommit.id).message"
-                  :placeholder="currentCommit.message"
+                  v-model="getOrCreateEdit(currentCommit!.id).message"
+                  :placeholder="currentCommit!.message"
                   rows="2"
                 />
               </label>
@@ -535,29 +564,29 @@ function resetEdits() {
                 <label class="field">
                   <span>作者名称</span>
                   <input
-                    v-model="getOrCreateEdit(currentCommit.id).authorName"
-                    :placeholder="currentCommit.authorName"
+                    v-model="getOrCreateEdit(currentCommit!.id).authorName"
+                    :placeholder="currentCommit!.authorName"
                   />
                 </label>
                 <label class="field">
                   <span>作者邮箱</span>
                   <input
-                    v-model="getOrCreateEdit(currentCommit.id).authorEmail"
-                    :placeholder="currentCommit.authorEmail"
+                    v-model="getOrCreateEdit(currentCommit!.id).authorEmail"
+                    :placeholder="currentCommit!.authorEmail"
                   />
                 </label>
                 <label class="field">
                   <span>作者时间</span>
                   <input
-                    v-model="getOrCreateEdit(currentCommit.id).authorDate"
-                    :placeholder="formatDate(currentCommit.authorDate)"
+                    v-model="getOrCreateEdit(currentCommit!.id).authorDate"
+                    :placeholder="formatDate(currentCommit!.authorDate)"
                   />
                 </label>
                 <label class="field">
                   <span>提交时间</span>
                   <input
-                    v-model="getOrCreateEdit(currentCommit.id).committerDate"
-                    :placeholder="formatDate(currentCommit.committerDate)"
+                    v-model="getOrCreateEdit(currentCommit!.id).committerDate"
+                    :placeholder="formatDate(currentCommit!.committerDate)"
                   />
                 </label>
               </div>
@@ -567,24 +596,16 @@ function resetEdits() {
                   :disabled="isLoading || isRewriting || manualEditCount === 0"
                   @click="applyManualEdits"
                 >
-                  保存并应用编辑 ({{ manualEditCount }} 待提交)
+                  提交更改 ({{ manualEditCount }})
                 </button>
                 <button class="btn btn-text" :disabled="manualEditCount === 0" @click="resetEdits">
                   撤销修改
                 </button>
               </div>
             </div>
-          </div>
 
-          <div class="resize-divider row-divider" @mousedown.prevent="startEditResize"></div>
-
-          <!-- Batch Area -->
-          <div class="card right-panel-card" :style="{ height: `${batchPanelHeight}px` }">
-            <div class="card-head">
-              <h2>批量平滑改写</h2>
-              <span class="chip">将其余记录均匀散布到指定窗口内</span>
-            </div>
-            <div class="form-body">
+            <div v-else-if="rightTab === 'batch'" class="form-body">
+              <div class="card-desc">将所有提交均匀分配到时间窗口内</div>
               <div class="form-grid compact">
                 <label class="field">
                   <span>分配开始日期</span>
@@ -617,36 +638,15 @@ function resetEdits() {
                   :disabled="isLoading || isRewriting || !hasHistory"
                   @click="applyBatchTimelineEdits"
                 >
-                  <svg
-                    width="16"
-                    height="16"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    class="mr-1"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M13 10V3L4 14h7v7l9-11h-7z"
-                    />
-                  </svg>
-                  执行时间线批量重写
+                  提交批量更改
                 </button>
               </div>
             </div>
-          </div>
 
-          <div class="resize-divider row-divider" @mousedown.prevent="startBatchResize"></div>
-
-          <!-- Logs Area -->
-          <div class="card flex-grow min-h-160">
-            <div class="card-head">
-              <h2>运行日志</h2>
-              <button class="btn btn-text btn-xs" @click="clearLogs">清空</button>
-            </div>
-            <div class="log-box" ref="logContentRef">
+            <div v-else class="log-box" ref="logContentRef">
+              <div class="log-toolbar">
+                <button class="btn btn-text btn-xs" @click="clearLogs">清空</button>
+              </div>
               <div v-if="logs.length === 0" class="log-empty">日志模块休眠中...</div>
               <div v-for="(item, index) in logs" :key="`${index}-${item}`" class="log-item">
                 <span class="log-icon">›</span> <span class="log-text">{{ item }}</span>
@@ -656,6 +656,25 @@ function resetEdits() {
         </div>
       </div>
     </main>
+
+    <div v-if="isBusyModalVisible" class="modal-mask">
+      <div class="modal-card">
+        <div class="modal-title">{{ busyTitle }}</div>
+        <div class="modal-text">{{ busyText }}</div>
+        <div class="modal-loading"></div>
+      </div>
+    </div>
+
+    <div v-if="isConfirmModalVisible" class="modal-mask">
+      <div class="modal-card confirm-card">
+        <div class="modal-title">{{ confirmTitle }}</div>
+        <div class="modal-text">{{ confirmText }}</div>
+        <div class="actions-row modal-actions">
+          <button class="btn btn-text" @click="closeConfirmModal">取消</button>
+          <button class="btn btn-primary" @click="confirmRewrite">确认执行</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -826,19 +845,11 @@ function resetEdits() {
   display: flex;
   flex-direction: column;
   margin-left: 12px;
-  padding-bottom: 8px;
 }
 
 .right-panel-card {
-  flex: 0 0 auto;
-  min-height: 180px;
-}
-
-.flex-grow {
-  flex: 1 1 0;
-}
-.min-h-160 {
-  min-height: 160px;
+  min-height: 0;
+  height: 100%;
 }
 
 .card-head {
@@ -881,7 +892,7 @@ function resetEdits() {
 
 .form-body {
   padding: 20px 24px;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .scroll-y {
@@ -1151,6 +1162,49 @@ textarea {
   border-radius: 8px;
 }
 
+.card-desc {
+  font-size: 13px;
+  color: #64748b;
+  margin-bottom: 12px;
+}
+
+.panel-meta {
+  font-size: 12px;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 12px;
+  width: fit-content;
+}
+
+.tab-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f1f5f9;
+  padding: 4px;
+  border-radius: 10px;
+}
+
+.tab-btn {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  background: #ffffff;
+  color: #1d4ed8;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
+}
+
 /* Logs */
 .log-box {
   background: #1e293b;
@@ -1158,11 +1212,17 @@ textarea {
   padding: 16px;
   margin: 16px 20px 20px;
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden;
   min-height: 100px;
   font-family: 'JetBrains Mono', Consolas, monospace;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.log-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
 }
 
 .log-empty {
@@ -1230,25 +1290,64 @@ textarea {
   border-radius: 2px;
 }
 
-.row-divider {
-  height: 10px;
-  cursor: row-resize;
-}
-
-.row-divider::before {
-  content: '';
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  top: 4px;
-  height: 2px;
-  background: #dbe4ef;
-  border-radius: 2px;
-}
-
-.col-divider:hover::before,
-.row-divider:hover::before {
+.col-divider:hover::before {
   background: #93c5fd;
+}
+
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.modal-card {
+  width: min(420px, calc(100vw - 40px));
+  background: #ffffff;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.2);
+  padding: 20px;
+}
+
+.confirm-card {
+  width: min(460px, calc(100vw - 40px));
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.modal-text {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.modal-loading {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid #dbeafe;
+  border-top-color: #2563eb;
+  animation: spin 0.8s linear infinite;
+  margin-top: 16px;
+}
+
+.modal-actions {
+  margin-top: 18px;
+  justify-content: flex-end;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Scrollbars */

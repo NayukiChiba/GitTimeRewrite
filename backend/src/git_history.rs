@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use std::process::Command;
 use tauri::{AppHandle, Emitter};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommit {
@@ -106,10 +109,16 @@ fn ensure_git_repo(repo_path: &str) -> Result<(), String> {
 }
 
 fn run_git_command(repo_path: &str, args: &[&str]) -> Result<String, String> {
-    let result = Command::new("git")
-        .arg("-C")
-        .arg(repo_path)
-        .args(args)
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repo_path).args(args);
+
+    #[cfg(target_os = "windows")]
+    {
+        // CREATE_NO_WINDOW，避免执行 git 时弹出控制台窗口
+        command.creation_flags(0x08000000);
+    }
+
+    let result = command
         .output()
         .map_err(|e| format!("执行 git 失败: {e}"))?;
 
